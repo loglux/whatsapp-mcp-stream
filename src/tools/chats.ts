@@ -39,6 +39,30 @@ export function registerChatTools(
   );
 
   server.tool(
+    'list_groups',
+    'List group chats only.',
+    {
+      limit: z.number().int().positive().optional().default(20).describe('Maximum number of groups to return'),
+      include_last_message: z.boolean().optional().default(true).describe('Whether to include the last message details'),
+    },
+    async ({ limit, include_last_message }): Promise<CallToolResult> => {
+      try {
+        const groups = await whatsappService.listGroups(limit, include_last_message);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(groups, null, 2) }],
+        };
+      } catch (error: any) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.error(`Error in list_groups tool: ${message}`);
+        return {
+          content: [{ type: 'text', text: `Error listing groups: ${message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
     'get_chat_by_id',
     'Get WhatsApp chat metadata by JID.',
     {
