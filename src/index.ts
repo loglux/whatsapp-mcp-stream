@@ -115,6 +115,14 @@ process.on('unhandledRejection', (reason) => {
     reason instanceof Error
       ? `${reason.message}\n${reason.stack || ''}`
       : JSON.stringify(reason);
+
+  // Baileys иногда кидает "Timed Out" на сетевых запросах.
+  // Не валим процесс из-за одиночных таймаутов.
+  if (typeof message === 'string' && message.includes('Timed Out')) {
+    log.warn(`Unhandled Promise Rejection (ignored timeout): ${message}`);
+    return;
+  }
+
   log.error(`Unhandled Promise Rejection: ${message}`);
   gracefulShutdown('unhandledRejection');
 });

@@ -148,6 +148,31 @@
             align-items: center;
             margin-top: 10px;
         }
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin: 20px 0 10px;
+            flex-wrap: wrap;
+        }
+        .tab-btn {
+            background: #e9ecef;
+            color: #333;
+            border: 1px solid #d9dee3;
+            padding: 8px 14px;
+            border-radius: 20px;
+            font-size: 14px;
+        }
+        .tab-btn.active {
+            background: #25D366;
+            color: white;
+            border-color: #25D366;
+        }
+        .tab-panel {
+            display: none;
+        }
+        .tab-panel.active {
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -174,36 +199,70 @@
                 <span id="statusLoading" class="loading hidden"></span>
                 Check Status
             </button>
+            <button id="forceResyncBtn" onclick="forceResync()">
+                <span id="resyncLoading" class="loading hidden"></span>
+                Force Resync
+            </button>
             <button id="logoutBtn" class="logout" onclick="logout()" disabled>
                 <span id="logoutLoading" class="loading hidden"></span>
                 Logout WhatsApp
             </button>
         </div>
 
-        <div class="settings">
-            <h4>Settings</h4>
-            <label for="mediaBaseUrl">Media Public Base URL</label>
-            <input id="mediaBaseUrl" type="text" placeholder="http://192.168.10.32:3003">
-            <div class="row">
-                <button id="saveSettingsBtn" onclick="saveSettings()">Save Settings</button>
-                <span id="settingsStatus"></span>
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="settingsTab" onclick="openTab('settingsTab', this)">Settings</button>
+            <button class="tab-btn" data-tab="exportTab" onclick="openTab('exportTab', this)">Export</button>
+            <button class="tab-btn" data-tab="statusTab" onclick="openTab('statusTab', this)">Status</button>
+        </div>
+
+        <div id="settingsTab" class="tab-panel active">
+            <div class="settings">
+                <h4>Settings</h4>
+                <label for="mediaBaseUrl">Media Public Base URL</label>
+                <input id="mediaBaseUrl" type="text" placeholder="http://192.168.10.32:3003">
+                <div class="row">
+                    <button id="saveSettingsBtn" onclick="saveSettings()">Save Settings</button>
+                    <span id="settingsStatus"></span>
+                </div>
+                <label for="uploadMaxMb" style="margin-top: 12px;">Upload Max (MB)</label>
+                <input id="uploadMaxMb" type="text" placeholder="50">
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:8px;">
+                        <input id="uploadEnabled" type="checkbox" checked>
+                        Upload enabled
+                    </label>
+                    <label style="display:flex; align-items:center; gap:8px;">
+                        <input id="requireUploadToken" type="checkbox">
+                        Require upload token
+                    </label>
+                </div>
+                <label for="maxFilesPerUpload">Max files per upload</label>
+                <input id="maxFilesPerUpload" type="text" placeholder="1">
+                <label for="uploadToken">Upload Token</label>
+                <input id="uploadToken" type="password" placeholder="set a token">
             </div>
-            <label for="uploadMaxMb" style="margin-top: 12px;">Upload Max (MB)</label>
-            <input id="uploadMaxMb" type="text" placeholder="50">
-            <div class="row">
-                <label style="display:flex; align-items:center; gap:8px;">
-                    <input id="uploadEnabled" type="checkbox" checked>
-                    Upload enabled
-                </label>
-                <label style="display:flex; align-items:center; gap:8px;">
-                    <input id="requireUploadToken" type="checkbox">
-                    Require upload token
-                </label>
+        </div>
+
+        <div id="exportTab" class="tab-panel">
+            <div class="settings">
+                <h4>Export Chat</h4>
+                <label for="exportJid">Chat JID</label>
+                <input id="exportJid" type="text" placeholder="123456789@s.whatsapp.net or 123456789-12345@g.us">
+                <div class="row">
+                    <label style="display:flex; align-items:center; gap:8px;">
+                        <input id="exportIncludeMedia" type="checkbox">
+                        Include downloaded media
+                    </label>
+                    <button id="exportBtn" onclick="exportChat()">Export</button>
+                </div>
             </div>
-            <label for="maxFilesPerUpload">Max files per upload</label>
-            <input id="maxFilesPerUpload" type="text" placeholder="1">
-            <label for="uploadToken">Upload Token</label>
-            <input id="uploadToken" type="password" placeholder="set a token">
+        </div>
+
+        <div id="statusTab" class="tab-panel">
+            <div class="settings">
+                <h4>Status</h4>
+                <div id="statusSnapshot">No status loaded yet.</div>
+            </div>
         </div>
 
         <div class="log">
@@ -224,6 +283,22 @@
             const timestamp = new Date().toLocaleTimeString();
             entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> <span class="${type}">${message}</span>`;
             logEntries.prepend(entry);
+        }
+
+        function openTab(tabId, button) {
+            document.querySelectorAll('.tab-panel').forEach(panel => panel.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            button.classList.add('active');
+        }
+
+        function formatTs(ts) {
+            if (!ts) return 'n/a';
+            try {
+                return new Date(ts).toLocaleString();
+            } catch (_e) {
+                return 'n/a';
+            }
         }
 
         function updateStatus(authStatus, readyStatus = false) {
@@ -284,6 +359,19 @@
                     `Status: ${data.authenticated ? 'Authenticated' : 'Not authenticated'}${data.ready ? ' (ready)' : ''}`,
                     'success'
                 );
+                logMessage(
+                    `Sync: chats=${data.chatCount ?? 0}, messages=${data.messageCount ?? 0}, ` +
+                    `history=${formatTs(data.lastHistorySyncAt)}, ` +
+                    `chats=${formatTs(data.lastChatsSyncAt)}, msgs=${formatTs(data.lastMessagesSyncAt)}` +
+                    `${data.warmupInProgress ? ' (warmup...)' : ''}`,
+                    'info'
+                );
+                logMessage(
+                    `DB: chats=${data.dbChats ?? 0}, messages=${data.dbMessages ?? 0}, media=${data.dbMedia ?? 0}`,
+                    'info'
+                );
+                const statusSnapshot = document.getElementById('statusSnapshot');
+                statusSnapshot.textContent = JSON.stringify(data, null, 2);
             } catch (error) {
                 logMessage('Failed to check status', 'error');
             } finally {
@@ -378,6 +466,36 @@
             } finally {
                 loading.classList.add('hidden');
             }
+        }
+
+        async function forceResync() {
+            if (!confirm('Force a full app-state resync? This may temporarily disconnect and reconnect.')) {
+                return;
+            }
+
+            const loading = document.getElementById('resyncLoading');
+            loading.classList.remove('hidden');
+
+            try {
+                await apiRequest('/api/force-resync', 'POST');
+                logMessage('Force resync requested', 'success');
+                setTimeout(checkStatus, 3000);
+            } catch (error) {
+                logMessage('Force resync failed', 'error');
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
+        function exportChat() {
+            const jid = document.getElementById('exportJid').value.trim();
+            if (!jid) {
+                logMessage('Please enter a chat JID to export', 'error');
+                return;
+            }
+            const includeMedia = document.getElementById('exportIncludeMedia').checked;
+            const url = `${API_BASE}/api/export/chat/${encodeURIComponent(jid)}?include_media=${includeMedia ? 'true' : 'false'}`;
+            window.open(url, '_blank');
         }
 
         // Auto-refresh QR code when not authenticated

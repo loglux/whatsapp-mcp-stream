@@ -13,8 +13,11 @@ import { BrowserProcessManager } from './utils/browser-process-manager.js';
 import qrcode from 'qrcode';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { randomUUID } from 'node:crypto';
 import multer from 'multer';
+const require = createRequire(import.meta.url);
+const archiver = require('archiver');
 // Import tool registration functions
 import { registerContactTools } from './tools/contacts.js';
 import { registerChatTools } from './tools/chats.js';
@@ -419,10 +422,22 @@ export class WhatsAppMcpServer {
         const isAuthenticated = this.whatsapp.isAuthenticated();
         const isReady = this.whatsapp.isReady();
         const hasQr = Boolean(this.whatsapp.getLatestQrCode());
+        const syncStats = this.whatsapp.getSyncStats();
+        const dbStats = this.whatsapp.getMessageStoreStats();
         res.json({
           authenticated: isAuthenticated,
           ready: isReady,
           qrAvailable: hasQr,
+          chatCount: syncStats.chatCount,
+          messageCount: syncStats.messageCount,
+          lastHistorySyncAt: syncStats.lastHistorySyncAt,
+          lastChatsSyncAt: syncStats.lastChatsSyncAt,
+          lastMessagesSyncAt: syncStats.lastMessagesSyncAt,
+          warmupAttempts: syncStats.warmupAttempts,
+          warmupInProgress: syncStats.warmupInProgress,
+          dbChats: dbStats?.chats ?? 0,
+          dbMessages: dbStats?.messages ?? 0,
+          dbMedia: dbStats?.media ?? 0,
           timestamp: new Date().toISOString()
         });
       } catch (error) {
@@ -529,6 +544,82 @@ export class WhatsAppMcpServer {
       } catch (error) {
         log.error('Error generating QR code image:', error);
         res.status(500).json({ error: 'Failed to generate QR code' });
+      }
+    });
+
+    app.post('/api/warmup', async (_req: Request, res: Response) => {
+      try {
+        const result = await this.whatsapp.runWarmup();
+        res.json({ success: true, ...result });
+      } catch (error) {
+        log.error('Error running warmup:', error);
+        res.status(500).json({ error: 'Failed to run warmup' });
+      }
+    });
+
+    app.post('/api/force-resync', async (_req: Request, res: Response) => {
+      try {
+        await this.whatsapp.forceResync();
+        res.json({ success: true });
+      } catch (error) {
+        log.error('Error forcing resync:', error);
+        res.status(500).json({ error: 'Failed to force resync' });
+      }
+    });
+
+    app.get('/api/export/chat/:jid', async (req: Request, res: Response) => {
+      try {
+        const jid = String(req.params.jid || '').trim();
+        if (!jid) {
+          res.status(400).json({ error: 'Missing chat JID' });
+          return;
+        }
+        const includeMedia = String(req.query.include_media || '').toLowerCase() === 'true';
+        const { chat, messages, media } = await this.whatsapp.exportChat(jid, includeMedia);
+        if (!chat && messages.length === 0) {
+          res.status(404).json({ error: 'Chat not found in database' });
+          return;
+        }
+
+        const safeJid = jid.replace(/[^a-zA-Z0-9._-]/g, '_');
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="chat_${safeJid}.zip"`);
+
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        archive.on('error', (err: Error) => {
+          log.error({ err }, 'Export archive error');
+          try {
+            res.status(500).end();
+          } catch {
+            // ignore
+          }
+        });
+
+        archive.pipe(res);
+
+        const publicBase = (runtimeSettings.media_public_base_url || process.env.MEDIA_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+        const mediaEntries = media.map((m) => ({
+          message_id: m.message_id,
+          filename: m.filename,
+          mimetype: m.mimetype,
+          size: m.size,
+          url: publicBase ? `${publicBase}/media/${m.filename}` : `/media/${m.filename}`,
+        }));
+
+        archive.append(JSON.stringify({ chat, messages, media: mediaEntries }, null, 2), { name: 'chat.json' });
+
+        if (includeMedia) {
+          for (const m of media) {
+            if (fs.existsSync(m.file_path)) {
+              archive.file(m.file_path, { name: path.join('media', m.filename) });
+            }
+          }
+        }
+
+        await archive.finalize();
+      } catch (error) {
+        log.error('Error exporting chat:', error);
+        res.status(500).json({ error: 'Failed to export chat' });
       }
     });
 

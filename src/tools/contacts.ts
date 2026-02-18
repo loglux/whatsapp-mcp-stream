@@ -41,6 +41,37 @@ export function registerContactTools(
   );
 
   server.tool(
+    'resolve_contact',
+    'Resolve a contact by name or phone number (returns best matches).',
+    {
+      query: z.string().describe('Name or phone number to resolve'),
+      limit: z.number().int().positive().optional().default(5).describe('Maximum number of matches to return'),
+    },
+    async ({ query, limit }): Promise<CallToolResult> => {
+      try {
+        const contacts = await whatsappService.resolveContacts(query, limit);
+        const simplified = contacts.map(c => ({
+          id: c.id,
+          name: c.name,
+          number: c.number,
+          pushname: c.pushname,
+          matchedBy: c.matchedBy,
+          score: c.score,
+        }));
+        return {
+          content: [{ type: 'text', text: JSON.stringify(simplified, null, 2) }],
+        };
+      } catch (error: any) {
+        log.error('Error in resolve_contact tool:', error);
+        return {
+          content: [{ type: 'text', text: `Error resolving contact: ${error.message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
     'get_contact_by_id',
     'Get contact details by JID.',
      {
@@ -103,6 +134,28 @@ export function registerContactTools(
             };
         }
     }
+  );
+
+  server.tool(
+    'get_group_info',
+    'Get group metadata and participants by group JID.',
+    {
+      group_jid: z.string().describe('The group JID (e.g., 123456789-12345@g.us)'),
+    },
+    async ({ group_jid }): Promise<CallToolResult> => {
+      try {
+        const info = await whatsappService.getGroupInfo(group_jid);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(info, null, 2) }],
+        };
+      } catch (error: any) {
+        log.error(`Error in get_group_info tool for JID ${group_jid}:`, error);
+        return {
+          content: [{ type: 'text', text: `Error getting group info for ${group_jid}: ${error.message}` }],
+          isError: true,
+        };
+      }
+    },
   );
 
   // Add other contact-related tools if needed (e.g., get_profile_pic)

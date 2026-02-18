@@ -99,8 +99,10 @@ Typical flow:
 | Tool | Description |
 | --- | --- |
 | `search_contacts` | Search contacts by name or phone number. |
+| `resolve_contact` | Resolve a contact by name or phone number (best matches). |
 | `get_contact_by_id` | Get contact details by JID. |
 | `get_profile_pic` | Get profile picture URL for a JID. |
+| `get_group_info` | Get group metadata and participants by group JID. |
 
 ### Chats
 
@@ -110,6 +112,7 @@ Typical flow:
 | `get_chat_by_id` | Get chat metadata by JID. |
 | `list_groups` | List group chats only. |
 | `get_direct_chat_by_contact_number` | Resolve a direct chat JID by phone number. |
+| `get_chat_by_contact` | Resolve a contact by name or phone number and return chat metadata. |
 
 ### Messages
 
@@ -138,3 +141,21 @@ Typical flow:
 ## License
 
 MIT
+
+## Persistence
+
+Chats and messages are persisted to a local SQLite database stored in the session volume.
+
+Environment variables:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DB_PATH` | `<SESSION_DIR>/store.sqlite` | SQLite database path for chats/messages persistence. |
+
+## Export
+
+Export a chat (JSON + optional downloaded media) via:
+
+`GET /api/export/chat/:jid?include_media=true`
+
+If `include_media=true`, the ZIP includes files already downloaded via `download_media`. It does not fetch missing media from WhatsApp.

@@ -128,6 +128,52 @@ export function registerChatTools(
     },
   );
 
+  server.tool(
+    'get_chat_by_contact',
+    'Resolve a contact by name or phone number and return the chat metadata.',
+    {
+      query: z.string().describe('Name or phone number to resolve'),
+      max_candidates: z.number().int().positive().optional().default(5).describe('Maximum number of matches to consider'),
+    },
+    async ({ query, max_candidates }): Promise<CallToolResult> => {
+      try {
+        const candidates = await whatsappService.resolveContacts(query, max_candidates);
+        if (!candidates.length) {
+          return {
+            content: [{ type: 'text', text: `No contacts matched for query: ${query}` }],
+            isError: true,
+          };
+        }
+
+        const top = candidates[0];
+        const second = candidates[1];
+        const canAutoSelect = top && (!second || top.score >= (second.score + 10)) && top.score >= 90;
+
+        if (!canAutoSelect && candidates.length > 1) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ matches: candidates }, null, 2) }],
+          };
+        }
+
+        const chat = await whatsappService.getChatById(top.id);
+        if (!chat) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ contact: top, chat: null }, null, 2) }],
+          };
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify(chat, null, 2) }],
+        };
+      } catch (error: any) {
+        log.error(`Error in get_chat_by_contact tool for query ${query}:`, error);
+        return {
+          content: [{ type: 'text', text: `Error getting chat for ${query}: ${error.message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   // get_contact_chats can be expensive without a dedicated index.
   // A possible implementation would list all chats and filter by participants, but this is very inefficient.
   // We might omit this or provide a limited version based on known chats.
