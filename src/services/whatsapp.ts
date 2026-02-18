@@ -451,6 +451,38 @@ export class WhatsAppService {
     return list.slice(-limit).map((msg) => this.mapMessage(msg));
   }
 
+  async searchMessages(query: string, limit = 20, chatId?: string): Promise<SimpleMessage[]> {
+    const q = query.toLowerCase();
+    const results: SimpleMessage[] = [];
+
+    const searchList = (msgs: any[]) => {
+      for (const msg of msgs) {
+        const mapped = this.mapMessage(msg);
+        if (mapped.body && mapped.body.toLowerCase().includes(q)) {
+          results.push(mapped);
+        }
+      }
+    };
+
+    if (chatId) {
+      const normalized = this.normalizeJid(chatId);
+      if (this.store?.loadMessages) {
+        const raw = await this.store.loadMessages(normalized, Math.max(50, limit * 5));
+        raw.forEach((msg: any) => this.trackMessage(msg));
+        searchList(raw);
+      } else {
+        const list = this.messagesByChat.get(normalized) || [];
+        searchList(list);
+      }
+    } else {
+      const all = Array.from(this.messageIndex.values());
+      searchList(all);
+    }
+
+    results.sort((a, b) => b.timestamp - a.timestamp);
+    return results.slice(0, limit);
+  }
+
   async getMessageById(messageId: string): Promise<SimpleMessage | null> {
     const msg = this.messageIndex.get(messageId);
     if (!msg) return null;

@@ -62,6 +62,30 @@ export function registerMessageTools(
     }
   );
 
+  server.tool(
+    'search_messages',
+    'Search messages by text, optionally within a specific chat.',
+    {
+      query: z.string().describe('Text to search for'),
+      chat_id: z.string().optional().describe('Optional chat JID to scope search'),
+      limit: z.number().int().positive().optional().default(20).describe('Maximum number of results'),
+    },
+    async ({ query, chat_id, limit }): Promise<CallToolResult> => {
+      try {
+        const messages = await whatsappService.searchMessages(query, limit, chat_id);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(messages, null, 2) }],
+        };
+      } catch (error: any) {
+        log.error('Error in search_messages tool:', error);
+        return {
+          content: [{ type: 'text', text: `Error searching messages: ${error.message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   // A simple implementation might fetch N messages before/after based on timestamp, but exact context is hard.
   // This implementation fetches recent messages and identifies the target.
   server.tool(

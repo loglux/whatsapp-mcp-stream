@@ -115,6 +115,7 @@ Typical flow:
 | Tool | Description |
 | --- | --- |
 | `list_messages` | Get messages from a specific chat. |
+| `search_messages` | Search messages by text (optionally scoped to a chat). |
 | `get_message_by_id` | Get a specific message by ID (`jid:id`). |
 | `get_message_context` | Get recent messages around a specific message. |
 | `get_last_interaction` | Get the most recent message for a JID. |
