@@ -67,6 +67,8 @@ export interface DownloadedMedia {
 export class WhatsAppService {
   private sock: any | null = null;
   private store: any | null = null;
+  private storePath: string | null = null;
+  private storeFlushTimer: NodeJS.Timeout | null = null;
   private latestQrCode: string | null = null;
   private isAuthenticatedFlag = false;
   private isReadyFlag = false;
@@ -188,6 +190,26 @@ export class WhatsAppService {
 
       if (typeof makeInMemoryStore === 'function') {
         this.store = makeInMemoryStore({ logger });
+        this.storePath = process.env.STORE_PATH || path.join(this.sessionDir, 'store.json');
+        try {
+          if (this.storePath && fs.existsSync(this.storePath) && this.store?.readFromFile) {
+            this.store.readFromFile(this.storePath);
+            log.info({ storePath: this.storePath }, 'Loaded WhatsApp store from disk');
+          }
+        } catch (error) {
+          log.warn({ err: error }, 'Failed to load WhatsApp store from disk');
+        }
+        if (this.store?.writeToFile) {
+          this.storeFlushTimer = setInterval(() => {
+            try {
+              if (this.storePath) {
+                this.store.writeToFile(this.storePath);
+              }
+            } catch (error) {
+              log.warn({ err: error }, 'Failed to persist WhatsApp store');
+            }
+          }, 10000);
+        }
       } else {
         this.store = null;
       }
@@ -213,6 +235,10 @@ export class WhatsAppService {
 
       this.sock.ev.on('connection.update', (update: any) => {
         const { connection, lastDisconnect, qr } = update;
+
+        if (connection) {
+          log.info({ connection }, 'WhatsApp connection update');
+        }
 
         if (qr) {
           this.latestQrCode = qr;
@@ -277,6 +303,9 @@ export class WhatsAppService {
         if (payload?.chats && Array.isArray(payload.chats) && this.store?.chats?.insert) {
           this.store.chats.insert(payload.chats);
         }
+        if (payload?.chats && Array.isArray(payload.chats)) {
+          log.info({ count: payload.chats.length }, 'Chats synced');
+        }
       });
 
       this.sock.ev.on('messages.set', (payload: any) => {
@@ -284,6 +313,9 @@ export class WhatsAppService {
           for (const msg of payload.messages) {
             this.trackMessage(msg);
           }
+        }
+        if (payload?.messages && Array.isArray(payload.messages)) {
+          log.info({ count: payload.messages.length }, 'Messages synced');
         }
       });
 
@@ -304,6 +336,11 @@ export class WhatsAppService {
             this.trackMessage(msg);
           }
         }
+        log.info({
+          chats: Array.isArray(chats) ? chats.length : 0,
+          contacts: Array.isArray(contacts) ? contacts.length : 0,
+          messages: Array.isArray(messages) ? messages.length : 0,
+        }, 'Messaging history synced');
       });
     })().finally(() => {
       this.initializing = null;
@@ -333,6 +370,10 @@ export class WhatsAppService {
       this.sock.end(new Error('Client destroyed'));
     } catch (_error) {
       // Ignore
+    }
+    if (this.storeFlushTimer) {
+      clearInterval(this.storeFlushTimer);
+      this.storeFlushTimer = null;
     }
     this.sock = null;
     this.isAuthenticatedFlag = false;

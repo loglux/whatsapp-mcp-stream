@@ -17,6 +17,9 @@ services:
       # Media storage directory
       - MEDIA_DIR=/app/media
 
+      # Baileys store path (persist chats/messages)
+      - STORE_PATH=/app/whatsapp-sessions/baileys/store.json
+
       # For SSE transport, you can specify port (default: 3001)
       - SSE_PORT=3001
     volumes:
