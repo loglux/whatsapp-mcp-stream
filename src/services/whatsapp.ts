@@ -489,6 +489,17 @@ export class WhatsAppService {
     return this.mapMessage(msg);
   }
 
+  async getProfilePicUrl(jid: string): Promise<string | null> {
+    const socket = this.getSocket();
+    try {
+      const normalized = this.normalizeJid(jid);
+      const url = await socket.profilePictureUrl(normalized, 'image');
+      return url || null;
+    } catch (_error) {
+      return null;
+    }
+  }
+
   async sendMessage(jid: string, message: string): Promise<any> {
     const socket = this.getSocket();
     return await socket.sendMessage(jid, { text: message });

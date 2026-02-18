@@ -100,6 +100,7 @@ Typical flow:
 | --- | --- |
 | `search_contacts` | Search contacts by name or phone number. |
 | `get_contact_by_id` | Get contact details by JID. |
+| `get_profile_pic` | Get profile picture URL for a JID. |
 
 ### Chats
 

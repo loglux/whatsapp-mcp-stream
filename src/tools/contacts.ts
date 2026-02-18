@@ -77,6 +77,34 @@ export function registerContactTools(
     }
   );
 
+  server.tool(
+    'get_profile_pic',
+    'Get profile picture URL for a contact or group JID.',
+     {
+      jid: z.string().describe('The JID of the contact or group (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)'),
+    },
+    async ({ jid }): Promise<CallToolResult> => {
+        try {
+            const url = await whatsappService.getProfilePicUrl(jid);
+            if (!url) {
+                 return {
+                    content: [{ type: 'text', text: `Profile picture not found for JID: ${jid}` }],
+                    isError: true,
+                };
+            }
+            return {
+                content: [{ type: 'text', text: JSON.stringify({ jid, url }, null, 2) }],
+            };
+        } catch (error: any) {
+            log.error(`Error in get_profile_pic tool for JID ${jid}:`, error);
+            return {
+                content: [{ type: 'text', text: `Error getting profile picture for ${jid}: ${error.message}` }],
+                isError: true,
+            };
+        }
+    }
+  );
+
   // Add other contact-related tools if needed (e.g., get_profile_pic)
 
   log.info('Contact tools registered.');
