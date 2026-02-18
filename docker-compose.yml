@@ -1,0 +1,50 @@
+services:
+  mcp-whatsapp:
+    build: .
+    container_name: whatsapp-mcp-stream
+    restart: always
+    ports:
+      - "3003:3001"  # MCP HTTP port (host:container)
+    environment:
+      # Logging level: fatal, error, warn, info, debug, trace
+      - LOG_LEVEL=debug
+
+      # Transport type: stdio, sse, or http (streamable HTTP)
+      - TRANSPORT=http
+
+      # FFmpeg path (already installed in container)
+      - FFMPEG_PATH=/usr/bin/ffmpeg
+      # Media storage directory
+      - MEDIA_DIR=/app/media
+
+      # For SSE transport, you can specify port (default: 3001)
+      - SSE_PORT=3001
+    volumes:
+      # Persist WhatsApp sessions (QR code authentication)
+      - whatsapp-sessions:/app/whatsapp-sessions
+
+      # Persist logs (optional)
+      - logs:/app/logs
+
+      # Persist downloaded media
+      - media:/app/media
+
+      # Mount local .env file for custom configuration (optional)
+      # - ./:/app/.env:ro
+    working_dir: /app
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    command: node --no-deprecation dist/index.js --http
+    user: mcpuser
+
+volumes:
+  whatsapp-sessions:
+    driver: local
+  logs:
+    driver: local
+  media:
+    driver: local

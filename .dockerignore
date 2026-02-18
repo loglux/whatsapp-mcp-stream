@@ -1,0 +1,40 @@
+# Dependencies
+node_modules
+npm-debug.log
+
+# Build outputs
+dist
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.production
+
+# Session data (should be persisted via volume)
+whatsapp-sessions/
+
+# Logs
+logs/
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+
+# Git
+.git
+.gitignore
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+
+# Chrome PID tracking file
+.chrome-pids.json

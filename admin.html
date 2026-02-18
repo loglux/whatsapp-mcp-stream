@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp MCP Stream - Admin</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #25D366;
+            margin-top: 0;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .status.authenticated {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.not-authenticated {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .qr-container {
+            text-align: center;
+            margin: 30px 0;
+        }
+        #qrImage {
+            max-width: 300px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
+            background: white;
+        }
+        button {
+            background: #25D366;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 5px;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #1da851;
+        }
+        button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        button.logout {
+            background: #dc3545;
+        }
+        button.logout:hover {
+            background: #c82333;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #25D366;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        .timestamp {
+            color: #6c757d;
+            margin-right: 10px;
+        }
+        .info {
+            color: #0d6efd;
+        }
+        .success {
+            color: #198754;
+        }
+        .error {
+            color: #dc3545;
+        }
+        .hidden {
+            display: none;
+        }
+        .settings {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            background: #fafafa;
+        }
+        .settings label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .settings input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .settings .row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 WhatsApp MCP Stream Admin</h1>
+
+        <div id="statusContainer" class="status not-authenticated">
+            Checking authentication status...
+        </div>
+
+        <div id="qrContainer" class="qr-container hidden">
+            <h3>Scan QR Code with WhatsApp</h3>
+            <p>Open WhatsApp on your phone → Settings → Linked Devices → Link a Device</p>
+            <img id="qrImage" alt="QR Code">
+            <p><small>QR code will automatically update when needed</small></p>
+        </div>
+
+        <div class="controls">
+            <button id="getQrBtn" onclick="getQrCode()">
+                <span id="qrLoading" class="loading hidden"></span>
+                Get QR Code
+            </button>
+            <button id="checkStatusBtn" onclick="checkStatus()">
+                <span id="statusLoading" class="loading hidden"></span>
+                Check Status
+            </button>
+            <button id="logoutBtn" class="logout" onclick="logout()" disabled>
+                <span id="logoutLoading" class="loading hidden"></span>
+                Logout WhatsApp
+            </button>
+        </div>
+
+        <div class="settings">
+            <h4>Settings</h4>
+            <label for="mediaBaseUrl">Media Public Base URL</label>
+            <input id="mediaBaseUrl" type="text" placeholder="http://192.168.10.32:3003">
+            <div class="row">
+                <button id="saveSettingsBtn" onclick="saveSettings()">Save Settings</button>
+                <span id="settingsStatus"></span>
+            </div>
+            <label for="uploadMaxMb" style="margin-top: 12px;">Upload Max (MB)</label>
+            <input id="uploadMaxMb" type="text" placeholder="50">
+            <div class="row">
+                <label style="display:flex; align-items:center; gap:8px;">
+                    <input id="uploadEnabled" type="checkbox" checked>
+                    Upload enabled
+                </label>
+                <label style="display:flex; align-items:center; gap:8px;">
+                    <input id="requireUploadToken" type="checkbox">
+                    Require upload token
+                </label>
+            </div>
+            <label for="maxFilesPerUpload">Max files per upload</label>
+            <input id="maxFilesPerUpload" type="text" placeholder="1">
+            <label for="uploadToken">Upload Token</label>
+            <input id="uploadToken" type="password" placeholder="set a token">
+        </div>
+
+        <div class="log">
+            <h4>Activity Log</h4>
+            <div id="logEntries"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let isAuthenticated = false;
+        let isReady = false;
+
+        function logMessage(message, type = 'info') {
+            const logEntries = document.getElementById('logEntries');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> <span class="${type}">${message}</span>`;
+            logEntries.prepend(entry);
+        }
+
+        function updateStatus(authStatus, readyStatus = false) {
+            const statusContainer = document.getElementById('statusContainer');
+            const qrContainer = document.getElementById('qrContainer');
+            const logoutBtn = document.getElementById('logoutBtn');
+
+            isAuthenticated = authStatus;
+            isReady = readyStatus;
+
+            if (authStatus) {
+                statusContainer.className = 'status authenticated';
+                statusContainer.innerHTML = isReady
+                    ? '✅ WhatsApp Authenticated & Connected'
+                    : '🕒 Authenticated, initializing...';
+                qrContainer.classList.add('hidden');
+                logoutBtn.disabled = false;
+            } else {
+                statusContainer.className = 'status not-authenticated';
+                statusContainer.innerHTML = '❌ Not Authenticated. Please scan QR code.';
+                qrContainer.classList.remove('hidden');
+                logoutBtn.disabled = true;
+            }
+        }
+
+        async function apiRequest(endpoint, method = 'GET', data = null) {
+            const options = {
+                method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            };
+
+            if (data) {
+                options.body = JSON.stringify(data);
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, options);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return await response.json();
+            } catch (error) {
+                logMessage(`API Error: ${error.message}`, 'error');
+                throw error;
+            }
+        }
+
+        async function checkStatus() {
+            const loading = document.getElementById('statusLoading');
+            loading.classList.remove('hidden');
+
+            try {
+                const data = await apiRequest('/api/status');
+                updateStatus(data.authenticated, data.ready);
+                logMessage(
+                    `Status: ${data.authenticated ? 'Authenticated' : 'Not authenticated'}${data.ready ? ' (ready)' : ''}`,
+                    'success'
+                );
+            } catch (error) {
+                logMessage('Failed to check status', 'error');
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
+        async function getQrCode() {
+            const loading = document.getElementById('qrLoading');
+            const qrImage = document.getElementById('qrImage');
+            loading.classList.remove('hidden');
+
+            try {
+                const response = await fetch(`${API_BASE}/api/qr`);
+                if (response.status === 204) {
+                    logMessage('QR not available (client initializing or already authenticated)', 'info');
+                    return;
+                }
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const blob = await response.blob();
+                const imageUrl = URL.createObjectURL(blob);
+                qrImage.src = imageUrl;
+
+                document.getElementById('qrContainer').classList.remove('hidden');
+                logMessage('QR code loaded', 'success');
+            } catch (error) {
+                logMessage('Failed to get QR code', 'error');
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
+        async function loadSettings() {
+            try {
+                const data = await apiRequest('/api/settings');
+                document.getElementById('mediaBaseUrl').value = data.media_public_base_url || '';
+                document.getElementById('uploadMaxMb').value = data.upload_max_mb ?? 50;
+                document.getElementById('uploadEnabled').checked = data.upload_enabled !== false;
+                document.getElementById('requireUploadToken').checked = Boolean(data.require_upload_token);
+                document.getElementById('maxFilesPerUpload').value = data.max_files_per_upload ?? 1;
+                document.getElementById('uploadToken').value = data.upload_token || '';
+            } catch (error) {
+                logMessage('Failed to load settings', 'error');
+            }
+        }
+
+        async function saveSettings() {
+            const status = document.getElementById('settingsStatus');
+            status.textContent = 'Saving...';
+            try {
+                const mediaBaseUrl = document.getElementById('mediaBaseUrl').value || '';
+                const uploadMaxMbRaw = document.getElementById('uploadMaxMb').value || '50';
+                const uploadMaxMb = Number(uploadMaxMbRaw);
+                const uploadEnabled = document.getElementById('uploadEnabled').checked;
+                const requireUploadToken = document.getElementById('requireUploadToken').checked;
+                const maxFilesPerUploadRaw = document.getElementById('maxFilesPerUpload').value || '1';
+                const maxFilesPerUpload = Number(maxFilesPerUploadRaw);
+                const uploadToken = document.getElementById('uploadToken').value || '';
+                await apiRequest('/api/settings', 'POST', {
+                    media_public_base_url: mediaBaseUrl,
+                    upload_max_mb: Number.isFinite(uploadMaxMb) ? uploadMaxMb : 50,
+                    upload_enabled: uploadEnabled,
+                    require_upload_token: requireUploadToken,
+                    max_files_per_upload: Number.isFinite(maxFilesPerUpload) ? maxFilesPerUpload : 1,
+                    upload_token: uploadToken
+                });
+                status.textContent = 'Saved';
+                logMessage('Settings updated', 'success');
+            } catch (error) {
+                status.textContent = 'Save failed';
+                logMessage('Failed to save settings', 'error');
+            }
+        }
+
+        async function logout() {
+            if (!confirm('Are you sure you want to logout from WhatsApp? You will need to scan QR code again.')) {
+                return;
+            }
+
+            const loading = document.getElementById('logoutLoading');
+            loading.classList.remove('hidden');
+
+            try {
+                await apiRequest('/api/logout', 'POST');
+                updateStatus(false);
+                logMessage('Logged out successfully', 'success');
+            } catch (error) {
+                logMessage('Logout failed', 'error');
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
+        // Auto-refresh QR code when not authenticated
+        function startQrAutoRefresh() {
+            setInterval(async () => {
+                if (!isAuthenticated) {
+                    try {
+                        const response = await fetch(`${API_BASE}/api/qr`);
+                        if (response.ok) {
+                            const blob = await response.blob();
+                            const imageUrl = URL.createObjectURL(blob);
+                            document.getElementById('qrImage').src = imageUrl;
+                        } else if (response.status === 204) {
+                            // No QR yet
+                        }
+                    } catch (error) {
+                        // Silent fail - QR might not be available yet
+                    }
+                }
+            }, 10000); // Check every 10 seconds
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            logMessage('Admin panel loaded', 'info');
+            checkStatus();
+            loadSettings();
+            startQrAutoRefresh();
+        });
+    </script>
+</body>
+</html>
