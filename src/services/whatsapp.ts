@@ -300,11 +300,16 @@ export class WhatsAppService {
       });
 
       this.sock.ev.on('chats.set', (payload: any) => {
-        if (payload?.chats && Array.isArray(payload.chats) && this.store?.chats?.insert) {
-          this.store.chats.insert(payload.chats);
-        }
         if (payload?.chats && Array.isArray(payload.chats)) {
-          log.info({ count: payload.chats.length }, 'Chats synced');
+          const validChats = payload.chats.filter((chat: any) => chat?.id || chat?.jid);
+          if (validChats.length && this.store?.chats?.insert) {
+            try {
+              this.store.chats.insert(validChats);
+            } catch (error) {
+              log.warn({ err: error }, 'Failed to insert chats into store');
+            }
+          }
+          log.info({ count: validChats.length }, 'Chats synced');
         }
       });
 
@@ -321,8 +326,15 @@ export class WhatsAppService {
 
       this.sock.ev.on('messaging-history.set', (payload: any) => {
         const { chats, contacts, messages } = payload || {};
-        if (chats && Array.isArray(chats) && this.store?.chats?.insert) {
-          this.store.chats.insert(chats);
+        if (chats && Array.isArray(chats)) {
+          const validChats = chats.filter((chat: any) => chat?.id || chat?.jid);
+          if (validChats.length && this.store?.chats?.insert) {
+            try {
+              this.store.chats.insert(validChats);
+            } catch (error) {
+              log.warn({ err: error }, 'Failed to insert history chats into store');
+            }
+          }
         }
         if (contacts && this.store?.contacts) {
           for (const contact of contacts) {
