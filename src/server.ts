@@ -248,6 +248,16 @@ export class WhatsAppMcpServer {
 
       if (sessionId && this.httpTransports[sessionId]) {
         transport = this.httpTransports[sessionId];
+      } else if (sessionId && !this.httpTransports[sessionId]) {
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Bad Request: Invalid session ID',
+          },
+          id: req.body?.id ?? null,
+        });
+        return;
       } else if (!sessionId && isInitializeRequest(req.body)) {
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
