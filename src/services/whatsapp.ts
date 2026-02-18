@@ -421,12 +421,6 @@ export class WhatsAppService {
     return groups.slice(0, limit);
   }
 
-  async listGroups(limit = 20, includeLastMessage = true): Promise<SimpleChat[]> {
-    const chats = await this.listChats(limit * 5, includeLastMessage);
-    const groups = chats.filter((chat) => chat.isGroup);
-    return groups.slice(0, limit);
-  }
-
   async getChatById(jid: string): Promise<SimpleChat | null> {
     const normalized = this.normalizeJid(jid);
     if (this.store?.chats?.get) {
