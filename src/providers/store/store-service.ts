@@ -1,4 +1,10 @@
-import { MessageStore, StoredChat, StoredMedia, StoredMessage } from "../../storage/message-store.js";
+import {
+  MessageStore,
+  StoredChat,
+  StoredContact,
+  StoredMedia,
+  StoredMessage,
+} from "../../storage/message-store.js";
 import { log } from "../../utils/logger.js";
 
 export class StoreService {
@@ -22,7 +28,7 @@ export class StoreService {
     return Boolean(this.messageStore);
   }
 
-  stats(): { chats: number; messages: number; media: number } | null {
+  stats(): { chats: number; messages: number; media: number; contacts: number } | null {
     return this.messageStore ? this.messageStore.stats() : null;
   }
 
@@ -36,6 +42,10 @@ export class StoreService {
 
   upsertMedia(media: StoredMedia): void {
     this.messageStore?.upsertMedia(media);
+  }
+
+  upsertContact(contact: StoredContact): void {
+    this.messageStore?.upsertContact(contact);
   }
 
   listChats(limit = 20): StoredChat[] {
@@ -64,5 +74,17 @@ export class StoreService {
 
   listMediaByChat(jid: string): StoredMedia[] {
     return this.messageStore ? this.messageStore.listMediaByChat(jid) : [];
+  }
+
+  getContactById(jid: string): StoredContact | null {
+    return this.messageStore ? this.messageStore.getContactById(jid) : null;
+  }
+
+  listContacts(limit = 100): StoredContact[] {
+    return this.messageStore ? this.messageStore.listContacts(limit) : [];
+  }
+
+  searchContacts(query: string, limit = 20): StoredContact[] {
+    return this.messageStore ? this.messageStore.searchContacts(query, limit) : [];
   }
 }

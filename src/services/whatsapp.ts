@@ -12,6 +12,7 @@ import {
 } from "../core/types.js";
 import {
   StoredChat,
+  StoredContact,
   StoredMessage,
   StoredMedia,
 } from "../storage/message-store.js";
@@ -127,6 +128,23 @@ export class WhatsAppService {
       timestamp: Number(chat?.conversationTimestamp || 0) * 1000,
     };
     this.storeService.upsertChat(record);
+  }
+
+  private upsertStoredContact(contact: any): void {
+    if (!this.storeService || !contact) return;
+    const jid = contact?.id || contact?.jid;
+    if (!jid) return;
+    const mapped = mapContact(contact);
+    const record: StoredContact = {
+      jid,
+      name: mapped.name,
+      pushname: mapped.pushname,
+      number: mapped.number || null,
+      is_group: mapped.isGroup ? 1 : 0,
+      is_my_contact: mapped.isMyContact ? 1 : 0,
+      updated_at: Date.now(),
+    };
+    this.storeService.upsertContact(record);
   }
 
   private normalizeChatRecord(chat: any): any | null {
@@ -295,6 +313,9 @@ export class WhatsAppService {
       sock.ev.on("contacts.upsert", (payload: any) => {
         if (payload && Array.isArray(payload)) {
           log.info({ count: payload.length }, "Contacts upsert");
+          for (const contact of payload) {
+            this.upsertStoredContact(contact);
+          }
         }
       });
 
@@ -306,6 +327,12 @@ export class WhatsAppService {
 
       sock.ev.on("messaging-history.set", (payload: any) => {
         this.sync.handleMessagingHistorySet(payload, store);
+        const contacts = payload?.contacts;
+        if (contacts && Array.isArray(contacts)) {
+          for (const contact of contacts) {
+            this.upsertStoredContact(contact);
+          }
+        }
       });
     })().finally(() => {
       this.initializing = null;
@@ -411,6 +438,7 @@ export class WhatsAppService {
     chats: number;
     messages: number;
     media: number;
+    contacts: number;
   } | null {
     if (!this.storeService) return null;
     return this.storeService.stats();
@@ -822,27 +850,52 @@ export class WhatsAppService {
   async searchContacts(query: string): Promise<SimpleContact[]> {
     const q = query.toLowerCase();
     const store = this.getStoreOptional();
-    if (!store?.contacts) return [];
+    if (store?.contacts) {
+      const contacts = Object.values(store.contacts) as any[];
+      return contacts
+        .filter((contact) => {
+          const name = (contact?.name || contact?.notify || "").toLowerCase();
+          const id = String(contact?.id || "").toLowerCase();
+          return name.includes(q) || id.includes(q);
+        })
+        .map((contact) => mapContact(contact));
+    }
 
-    const contacts = Object.values(store.contacts) as any[];
-    return contacts
-      .filter((contact) => {
-        const name = (contact?.name || contact?.notify || "").toLowerCase();
-        const id = String(contact?.id || "").toLowerCase();
-        return name.includes(q) || id.includes(q);
-      })
-      .map((contact) => mapContact(contact));
+    if (this.storeService) {
+      const stored = this.storeService.searchContacts(query, 50);
+      return stored.map((contact) => ({
+        id: contact.jid,
+        name: contact.name,
+        pushname: contact.pushname,
+        isMe: false,
+        isUser: true,
+        isGroup: Boolean(contact.is_group),
+        isWAContact: true,
+        isMyContact: Boolean(contact.is_my_contact),
+        number: contact.number || "",
+      }));
+    }
+
+    return [];
   }
 
   async resolveContacts(query: string, limit = 5): Promise<ResolvedContact[]> {
     const text = query.trim().toLowerCase();
     const store = this.getStoreOptional();
-    if (!text || !store?.contacts) return [];
+    if (!text) return [];
 
     const digits = text.replace(/[^\d]/g, "");
     const hasDigits = digits.length >= 6;
 
-    const contacts = Object.values(store.contacts) as any[];
+    const contacts = store?.contacts
+      ? (Object.values(store.contacts) as any[])
+      : this.storeService
+        ? this.storeService.listContacts(200).map((contact) => ({
+            id: contact.jid,
+            name: contact.name,
+            notify: contact.pushname,
+          }))
+        : [];
     const scored = contacts.map((contact) => {
       const mapped = mapContact(contact);
       const name = (mapped.name || "").toLowerCase();
@@ -920,10 +973,29 @@ export class WhatsAppService {
 
   async getContactById(jid: string): Promise<SimpleContact | null> {
     const store = this.getStoreOptional();
-    if (!store?.contacts) return null;
-    const contact = store.contacts[jid];
-    if (!contact) return null;
-    return mapContact(contact);
+    if (store?.contacts) {
+      const contact = store.contacts[jid];
+      if (!contact) return null;
+      return mapContact(contact);
+    }
+
+    if (this.storeService) {
+      const contact = this.storeService.getContactById(jid);
+      if (!contact) return null;
+      return {
+        id: contact.jid,
+        name: contact.name,
+        pushname: contact.pushname,
+        isMe: false,
+        isUser: true,
+        isGroup: Boolean(contact.is_group),
+        isWAContact: true,
+        isMyContact: Boolean(contact.is_my_contact),
+        number: contact.number || "",
+      };
+    }
+
+    return null;
   }
 
   private getLastMessageForChat(jid: string): SimpleMessage | undefined {

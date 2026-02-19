@@ -35,6 +35,16 @@ export interface StoredMedia {
   size: number;
 }
 
+export interface StoredContact {
+  jid: string;
+  name: string | null;
+  pushname: string | null;
+  number: string | null;
+  is_group: number | null;
+  is_my_contact: number | null;
+  updated_at: number;
+}
+
 export class MessageStore {
   private db: any;
 
@@ -78,9 +88,22 @@ export class MessageStore {
         size INTEGER
       );
 
+      CREATE TABLE IF NOT EXISTS contacts (
+        jid TEXT PRIMARY KEY,
+        name TEXT,
+        pushname TEXT,
+        number TEXT,
+        is_group INTEGER,
+        is_my_contact INTEGER,
+        updated_at INTEGER
+      );
+
       CREATE INDEX IF NOT EXISTS idx_media_chat ON media(chat_jid);
 
       CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_jid, timestamp DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
+      CREATE INDEX IF NOT EXISTS idx_contacts_number ON contacts(number);
     `;
     this.db.exec(sql);
   }
@@ -168,6 +191,52 @@ export class MessageStore {
     stmt.run(record);
   }
 
+  upsertContact(contact: StoredContact): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO contacts (jid, name, pushname, number, is_group, is_my_contact, updated_at)
+       VALUES (@jid, @name, @pushname, @number, @is_group, @is_my_contact, @updated_at)
+       ON CONFLICT(jid) DO UPDATE SET
+         name=COALESCE(excluded.name, contacts.name),
+         pushname=COALESCE(excluded.pushname, contacts.pushname),
+         number=COALESCE(excluded.number, contacts.number),
+         is_group=COALESCE(excluded.is_group, contacts.is_group),
+         is_my_contact=COALESCE(excluded.is_my_contact, contacts.is_my_contact),
+         updated_at=excluded.updated_at`,
+    );
+    stmt.run(contact);
+  }
+
+  getContactById(jid: string): StoredContact | null {
+    const stmt = this.db.prepare(
+      `SELECT jid, name, pushname, number, is_group, is_my_contact, updated_at
+       FROM contacts
+       WHERE jid = ?`,
+    );
+    return stmt.get(jid) || null;
+  }
+
+  listContacts(limit = 100): StoredContact[] {
+    const stmt = this.db.prepare(
+      `SELECT jid, name, pushname, number, is_group, is_my_contact, updated_at
+       FROM contacts
+       ORDER BY updated_at DESC
+       LIMIT ?`,
+    );
+    return stmt.all(limit);
+  }
+
+  searchContacts(query: string, limit = 20): StoredContact[] {
+    const stmt = this.db.prepare(
+      `SELECT jid, name, pushname, number, is_group, is_my_contact, updated_at
+       FROM contacts
+       WHERE name LIKE ? OR pushname LIKE ? OR number LIKE ? OR jid LIKE ?
+       ORDER BY updated_at DESC
+       LIMIT ?`,
+    );
+    const q = `%${query}%`;
+    return stmt.all(q, q, q, q, limit);
+  }
+
   getMediaByMessageId(messageId: string): StoredMedia | null {
     const stmt = this.db.prepare(
       `SELECT message_id, chat_jid, file_path, filename, mimetype, size FROM media WHERE message_id = ?`,
@@ -182,7 +251,12 @@ export class MessageStore {
     return stmt.all(jid);
   }
 
-  stats(): { chats: number; messages: number; media: number } {
+  stats(): {
+    chats: number;
+    messages: number;
+    media: number;
+    contacts: number;
+  } {
     const chats = this.db.prepare("SELECT COUNT(*) as count FROM chats").get()
       .count as number;
     const messages = this.db
@@ -190,7 +264,10 @@ export class MessageStore {
       .get().count as number;
     const media = this.db.prepare("SELECT COUNT(*) as count FROM media").get()
       .count as number;
-    return { chats, messages, media };
+    const contacts = this.db
+      .prepare("SELECT COUNT(*) as count FROM contacts")
+      .get().count as number;
+    return { chats, messages, media, contacts };
   }
 
   close(): void {

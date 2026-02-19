@@ -164,6 +164,7 @@ export function registerAdminRoutes(
         dbChats: dbStats?.chats ?? 0,
         dbMessages: dbStats?.messages ?? 0,
         dbMedia: dbStats?.media ?? 0,
+        dbContacts: dbStats?.contacts ?? 0,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
