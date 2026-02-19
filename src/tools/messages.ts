@@ -1,20 +1,30 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
-import { WhatsAppService } from '../services/whatsapp.js'; // Removed unused SimpleMessage import
-import { log } from '../utils/logger.js';
-import { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { WhatsAppService } from "../services/whatsapp.js"; // Removed unused SimpleMessage import
+import { log } from "../utils/logger.js";
+import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 export function registerMessageTools(
   server: McpServer,
   whatsappService: WhatsAppService,
 ): void {
-  log.info('Registering message tools...');
+  log.info("Registering message tools...");
 
   server.tool(
-    'list_messages',
-    'Get WhatsApp messages from a specific chat.',
+    "list_messages",
+    "Get WhatsApp messages from a specific chat.",
     {
-      chat_id: z.string().describe('The JID of the chat to retrieve messages from (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)'),
-      limit: z.number().int().positive().optional().default(50).describe('Maximum number of messages to return'),
+      chat_id: z
+        .string()
+        .describe(
+          "The JID of the chat to retrieve messages from (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)",
+        ),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(50)
+        .describe("Maximum number of messages to return"),
       // Filtering would need to be done after fetching.
     },
     async ({ chat_id, limit }): Promise<CallToolResult> => {
@@ -22,12 +32,17 @@ export function registerMessageTools(
         const messages = await whatsappService.getMessages(chat_id, limit);
         // Return the simplified message structure
         return {
-          content: [{ type: 'text', text: JSON.stringify(messages, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(messages, null, 2) }],
         };
       } catch (error: any) {
         log.error(`Error in list_messages tool for chat ${chat_id}:`, error);
         return {
-          content: [{ type: 'text', text: `Error listing messages for chat ${chat_id}: ${error.message}` }],
+          content: [
+            {
+              type: "text",
+              text: `Error listing messages for chat ${chat_id}: ${error.message}`,
+            },
+          ],
           isError: true,
         };
       }
@@ -35,51 +50,83 @@ export function registerMessageTools(
   );
 
   server.tool(
-    'get_message_by_id',
-    'Get a specific WhatsApp message by its ID.',
+    "get_message_by_id",
+    "Get a specific WhatsApp message by its ID.",
     {
-        message_id: z.string().describe('The message ID in the format jid:id (e.g., 123456789@s.whatsapp.net:ABCDEF)'),
+      message_id: z
+        .string()
+        .describe(
+          "The message ID in the format jid:id (e.g., 123456789@s.whatsapp.net:ABCDEF)",
+        ),
     },
     async ({ message_id }): Promise<CallToolResult> => {
-        try {
-            const message = await whatsappService.getMessageById(message_id);
-            if (!message) {
-                return {
-                    content: [{ type: 'text', text: `Message not found for ID: ${message_id}` }],
-                    isError: true,
-                };
-            }
-            return {
-                content: [{ type: 'text', text: JSON.stringify(message, null, 2) }],
-            };
-        } catch (error: any) {
-            log.error(`Error in get_message_by_id tool for ID ${message_id}:`, error);
-            return {
-                content: [{ type: 'text', text: `Error getting message ${message_id}: ${error.message}` }],
-                isError: true,
-            };
+      try {
+        const message = await whatsappService.getMessageById(message_id);
+        if (!message) {
+          return {
+            content: [
+              { type: "text", text: `Message not found for ID: ${message_id}` },
+            ],
+            isError: true,
+          };
         }
-    }
+        return {
+          content: [{ type: "text", text: JSON.stringify(message, null, 2) }],
+        };
+      } catch (error: any) {
+        log.error(
+          `Error in get_message_by_id tool for ID ${message_id}:`,
+          error,
+        );
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting message ${message_id}: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
   );
 
   server.tool(
-    'search_messages',
-    'Search messages by text, optionally within a specific chat.',
+    "search_messages",
+    "Search messages by text, optionally within a specific chat.",
     {
-      query: z.string().describe('Text to search for'),
-      chat_id: z.string().optional().describe('Optional chat JID to scope search'),
-      limit: z.number().int().positive().optional().default(20).describe('Maximum number of results'),
+      query: z.string().describe("Text to search for"),
+      chat_id: z
+        .string()
+        .optional()
+        .describe("Optional chat JID to scope search"),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(20)
+        .describe("Maximum number of results"),
     },
     async ({ query, chat_id, limit }): Promise<CallToolResult> => {
       try {
-        const messages = await whatsappService.searchMessages(query, limit, chat_id);
+        const messages = await whatsappService.searchMessages(
+          query,
+          limit,
+          chat_id,
+        );
         return {
-          content: [{ type: 'text', text: JSON.stringify(messages, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(messages, null, 2) }],
         };
       } catch (error: any) {
-        log.error('Error in search_messages tool:', error);
+        log.error("Error in search_messages tool:", error);
         return {
-          content: [{ type: 'text', text: `Error searching messages: ${error.message}` }],
+          content: [
+            {
+              type: "text",
+              text: `Error searching messages: ${error.message}`,
+            },
+          ],
           isError: true,
         };
       }
@@ -89,11 +136,19 @@ export function registerMessageTools(
   // A simple implementation might fetch N messages before/after based on timestamp, but exact context is hard.
   // This implementation fetches recent messages and identifies the target.
   server.tool(
-    'get_message_context',
-    'Get recent messages around a specific message ID within its chat (context accuracy depends on fetch limit).',
+    "get_message_context",
+    "Get recent messages around a specific message ID within its chat (context accuracy depends on fetch limit).",
     {
-      message_id: z.string().describe('The serialized ID of the target message'),
-      limit: z.number().int().positive().optional().default(20).describe('Number of recent messages to fetch for context'),
+      message_id: z
+        .string()
+        .describe("The serialized ID of the target message"),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(20)
+        .describe("Number of recent messages to fetch for context"),
     },
     async ({ message_id, limit }): Promise<CallToolResult> => {
       try {
@@ -101,16 +156,23 @@ export function registerMessageTools(
         const targetMessage = await whatsappService.getMessageById(message_id);
         if (!targetMessage) {
           return {
-            content: [{ type: 'text', text: `Target message not found: ${message_id}` }],
+            content: [
+              { type: "text", text: `Target message not found: ${message_id}` },
+            ],
             isError: true,
           };
         }
 
         // Fetch recent messages from the same chat
-        const recentMessages = await whatsappService.getMessages(targetMessage.to, limit);
+        const recentMessages = await whatsappService.getMessages(
+          targetMessage.to,
+          limit,
+        );
 
         // Find the index of the target message
-        const targetIndex = recentMessages.findIndex(msg => msg.id === message_id);
+        const targetIndex = recentMessages.findIndex(
+          (msg) => msg.id === message_id,
+        );
 
         // Structure the context (this is approximate)
         const context = {
@@ -122,12 +184,20 @@ export function registerMessageTools(
         };
 
         return {
-          content: [{ type: 'text', text: JSON.stringify(context, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(context, null, 2) }],
         };
       } catch (error: any) {
-        log.error(`Error in get_message_context tool for message ${message_id}:`, error);
+        log.error(
+          `Error in get_message_context tool for message ${message_id}:`,
+          error,
+        );
         return {
-          content: [{ type: 'text', text: `Error getting context for message ${message_id}: ${error.message}` }],
+          content: [
+            {
+              type: "text",
+              text: `Error getting context for message ${message_id}: ${error.message}`,
+            },
+          ],
           isError: true,
         };
       }
@@ -136,10 +206,14 @@ export function registerMessageTools(
 
   // get_last_interaction is similar to list_chats with limit 1
   server.tool(
-    'get_last_interaction',
-    'Get the most recent message involving a specific contact or group JID.',
+    "get_last_interaction",
+    "Get the most recent message involving a specific contact or group JID.",
     {
-      jid: z.string().describe('The JID of the contact or group (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)'),
+      jid: z
+        .string()
+        .describe(
+          "The JID of the contact or group (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)",
+        ),
     },
     async ({ jid }): Promise<CallToolResult> => {
       try {
@@ -147,17 +221,29 @@ export function registerMessageTools(
         const chat = await whatsappService.getChatById(jid);
         if (!chat || !chat.lastMessage) {
           return {
-            content: [{ type: 'text', text: `No recent interaction found for JID: ${jid}` }],
+            content: [
+              {
+                type: "text",
+                text: `No recent interaction found for JID: ${jid}`,
+              },
+            ],
             isError: true, // Consider if this should be an error or just empty result
           };
         }
         return {
-          content: [{ type: 'text', text: JSON.stringify(chat.lastMessage, null, 2) }],
+          content: [
+            { type: "text", text: JSON.stringify(chat.lastMessage, null, 2) },
+          ],
         };
       } catch (error: any) {
         log.error(`Error in get_last_interaction tool for JID ${jid}:`, error);
         return {
-          content: [{ type: 'text', text: `Error getting last interaction for ${jid}: ${error.message}` }],
+          content: [
+            {
+              type: "text",
+              text: `Error getting last interaction for ${jid}: ${error.message}`,
+            },
+          ],
           isError: true,
         };
       }
@@ -165,37 +251,50 @@ export function registerMessageTools(
   );
 
   server.tool(
-    'send_message',
-    'Send a WhatsApp text message to a person or group.',
+    "send_message",
+    "Send a WhatsApp text message to a person or group.",
     {
-      recipient_jid: z.string().describe('The recipient JID (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)'),
-      message: z.string().describe('The message text to send'),
+      recipient_jid: z
+        .string()
+        .describe(
+          "The recipient JID (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)",
+        ),
+      message: z.string().describe("The message text to send"),
     },
     async ({ recipient_jid, message }): Promise<CallToolResult> => {
       try {
-        const sentMessage = await whatsappService.sendMessage(recipient_jid, message);
-        const messageId = sentMessage?.key?.remoteJid && sentMessage?.key?.id
-          ? `${sentMessage.key.remoteJid}:${sentMessage.key.id}`
-          : undefined;
+        const sentMessage = await whatsappService.sendMessage(
+          recipient_jid,
+          message,
+        );
+        const messageId =
+          sentMessage?.key?.remoteJid && sentMessage?.key?.id
+            ? `${sentMessage.key.remoteJid}:${sentMessage.key.id}`
+            : undefined;
         // Return confirmation or details of the sent message
         const result = {
           success: true,
-          message: 'Message sent successfully.',
-          messageId: messageId || 'unknown',
+          message: "Message sent successfully.",
+          messageId: messageId || "unknown",
           timestamp: Number(sentMessage?.messageTimestamp || Date.now() / 1000),
         };
         return {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };
       } catch (error: any) {
         log.error(`Error in send_message tool to ${recipient_jid}:`, error);
         return {
-          content: [{ type: 'text', text: `Error sending message to ${recipient_jid}: ${error.message}` }],
+          content: [
+            {
+              type: "text",
+              text: `Error sending message to ${recipient_jid}: ${error.message}`,
+            },
+          ],
           isError: true,
         };
       }
     },
   );
 
-  log.info('Message tools registered.');
+  log.info("Message tools registered.");
 }

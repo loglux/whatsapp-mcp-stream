@@ -1,17 +1,18 @@
-import { pino } from 'pino';
-import fs from 'fs';
-import path from 'path';
+import { pino } from "pino";
+import fs from "fs";
+import path from "path";
 
 // Determine if we're in a browser environment
-const isBrowser = typeof globalThis !== 'undefined' && 
-                 typeof (globalThis as any).window !== 'undefined' && 
-                 typeof (globalThis as any).window.localStorage !== 'undefined';
+const isBrowser =
+  typeof globalThis !== "undefined" &&
+  typeof (globalThis as any).window !== "undefined" &&
+  typeof (globalThis as any).window.localStorage !== "undefined";
 
 // We're now always using the custom destination regardless of transport type
 // to ensure no logs go to stdout/stderr
 
 // Create log directory if it doesn't exist
-const logDir = path.join(process.cwd(), 'logs');
+const logDir = path.join(process.cwd(), "logs");
 if (!isBrowser && !fs.existsSync(logDir)) {
   try {
     fs.mkdirSync(logDir, { recursive: true });
@@ -21,7 +22,7 @@ if (!isBrowser && !fs.existsSync(logDir)) {
 }
 
 // Define log file path
-const logFilePath = path.join(logDir, 'mcp-whatsapp.log');
+const logFilePath = path.join(logDir, "mcp-whatsapp.log");
 
 // Custom destination that writes to file or localStorage
 const customDestination = {
@@ -30,13 +31,14 @@ const customDestination = {
       // In browser, use localStorage with rotation to prevent overflow
       try {
         const storage = (globalThis as any).window.localStorage;
-        const key = 'mcp_whatsapp_log';
-        const existingLog = storage.getItem(key) || '';
+        const key = "mcp_whatsapp_log";
+        const existingLog = storage.getItem(key) || "";
         // Keep only last 100KB to prevent localStorage overflow
-        const maxSize = 100 * 1024; 
-        const newLog = existingLog.length > maxSize 
-          ? existingLog.substring(existingLog.length - maxSize / 2) + msg
-          : existingLog + msg;
+        const maxSize = 100 * 1024;
+        const newLog =
+          existingLog.length > maxSize
+            ? existingLog.substring(existingLog.length - maxSize / 2) + msg
+            : existingLog + msg;
         storage.setItem(key, newLog);
       } catch (e) {
         // Silent fail if localStorage is not available
@@ -50,29 +52,31 @@ const customDestination = {
       }
     }
     return true;
-  }
+  },
 };
 
 // Configure pino logger
 export const log = pino(
   {
-    level: process.env.LOG_LEVEL || 'info',
+    level: process.env.LOG_LEVEL || "info",
   },
   // Pass the custom destination as the second parameter
-  customDestination
+  customDestination,
 );
 
 // Add a method to retrieve logs (useful for debugging)
 export const getLogs = (): string => {
   if (isBrowser) {
-    return (globalThis as any).window.localStorage.getItem('mcp_whatsapp_log') || '';
+    return (
+      (globalThis as any).window.localStorage.getItem("mcp_whatsapp_log") || ""
+    );
   } else {
     try {
-      return fs.existsSync(logFilePath) 
-        ? fs.readFileSync(logFilePath, 'utf8')
-        : '';
+      return fs.existsSync(logFilePath)
+        ? fs.readFileSync(logFilePath, "utf8")
+        : "";
     } catch (e) {
-      return '';
+      return "";
     }
   }
 };

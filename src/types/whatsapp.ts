@@ -5,7 +5,7 @@ export type {
   SimpleChat,
   SimpleContact,
   SimpleMessage,
-} from '../services/whatsapp.js';
+} from "../services/whatsapp.js";
 
 // You could add more specific types here, for example:
 export interface MediaDownloadResult {
@@ -18,11 +18,11 @@ export interface MediaDownloadResult {
 }
 
 export interface SendMediaResult {
-    success: boolean;
-    message: string;
-    messageId?: string;
-    timestamp?: number;
-    filePathUsed?: string | undefined; // Path if local file was sent
+  success: boolean;
+  message: string;
+  messageId?: string;
+  timestamp?: number;
+  filePathUsed?: string | undefined; // Path if local file was sent
 }
 
 // Add any other WhatsApp-specific types required by your tools or services.

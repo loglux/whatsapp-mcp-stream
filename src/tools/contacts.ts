@@ -1,39 +1,50 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
-import { WhatsAppService } from '../services/whatsapp.js';
-import { log } from '../utils/logger.js';
-import { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { WhatsAppService } from "../services/whatsapp.js";
+import { log } from "../utils/logger.js";
+import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 export function registerContactTools(
   server: McpServer,
   whatsappService: WhatsAppService,
 ): void {
-  log.info('Registering contact tools...');
+  log.info("Registering contact tools...");
 
   server.tool(
-    'search_contacts',
-    'Search WhatsApp contacts by name or phone number.',
+    "search_contacts",
+    "Search WhatsApp contacts by name or phone number.",
     {
-      query: z.string().describe('Search term to match against contact names or phone numbers'),
+      query: z
+        .string()
+        .describe(
+          "Search term to match against contact names or phone numbers",
+        ),
     },
     async ({ query }): Promise<CallToolResult> => {
       try {
         const contacts = await whatsappService.searchContacts(query);
         // Map contacts to a simpler structure if needed, or return the full structure
-        const simplifiedContacts = contacts.map(c => ({
-            id: c.id,
-            name: c.name,
-            number: c.number,
-            pushname: c.pushname,
-            isMyContact: c.isMyContact,
+        const simplifiedContacts = contacts.map((c) => ({
+          id: c.id,
+          name: c.name,
+          number: c.number,
+          pushname: c.pushname,
+          isMyContact: c.isMyContact,
         }));
         return {
-          content: [{ type: 'text', text: JSON.stringify(simplifiedContacts, null, 2) }],
+          content: [
+            { type: "text", text: JSON.stringify(simplifiedContacts, null, 2) },
+          ],
         };
       } catch (error: any) {
-        log.error('Error in search_contacts tool:', error);
+        log.error("Error in search_contacts tool:", error);
         return {
-          content: [{ type: 'text', text: `Error searching contacts: ${error.message}` }],
+          content: [
+            {
+              type: "text",
+              text: `Error searching contacts: ${error.message}`,
+            },
+          ],
           isError: true,
         };
       }
@@ -41,16 +52,22 @@ export function registerContactTools(
   );
 
   server.tool(
-    'resolve_contact',
-    'Resolve a contact by name or phone number (returns best matches).',
+    "resolve_contact",
+    "Resolve a contact by name or phone number (returns best matches).",
     {
-      query: z.string().describe('Name or phone number to resolve'),
-      limit: z.number().int().positive().optional().default(5).describe('Maximum number of matches to return'),
+      query: z.string().describe("Name or phone number to resolve"),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(5)
+        .describe("Maximum number of matches to return"),
     },
     async ({ query, limit }): Promise<CallToolResult> => {
       try {
         const contacts = await whatsappService.resolveContacts(query, limit);
-        const simplified = contacts.map(c => ({
+        const simplified = contacts.map((c) => ({
           id: c.id,
           name: c.name,
           number: c.number,
@@ -59,12 +76,16 @@ export function registerContactTools(
           score: c.score,
         }));
         return {
-          content: [{ type: 'text', text: JSON.stringify(simplified, null, 2) }],
+          content: [
+            { type: "text", text: JSON.stringify(simplified, null, 2) },
+          ],
         };
       } catch (error: any) {
-        log.error('Error in resolve_contact tool:', error);
+        log.error("Error in resolve_contact tool:", error);
         return {
-          content: [{ type: 'text', text: `Error resolving contact: ${error.message}` }],
+          content: [
+            { type: "text", text: `Error resolving contact: ${error.message}` },
+          ],
           isError: true,
         };
       }
@@ -72,86 +93,122 @@ export function registerContactTools(
   );
 
   server.tool(
-    'get_contact_by_id',
-    'Get contact details by JID.',
-     {
-      jid: z.string().describe('The JID of the contact to retrieve (e.g., 123456789@s.whatsapp.net)'),
-    },
-    async ({ jid }): Promise<CallToolResult> => {
-        try {
-            const contact = await whatsappService.getContactById(jid);
-            if (!contact) {
-                 return {
-                    content: [{ type: 'text', text: `Contact not found for JID: ${jid}` }],
-                    isError: true, // Indicate not found as an error for the tool
-                };
-            }
-            // Return relevant contact details
-            const contactDetails = {
-                id: contact.id,
-                name: contact.name,
-                number: contact.number,
-                pushname: contact.pushname,
-                isMyContact: contact.isMyContact,
-                isWAContact: contact.isWAContact,
-            };
-            return {
-                content: [{ type: 'text', text: JSON.stringify(contactDetails, null, 2) }],
-            };
-        } catch (error: any) {
-            log.error(`Error in get_contact_by_id tool for JID ${jid}:`, error);
-            return {
-                content: [{ type: 'text', text: `Error getting contact ${jid}: ${error.message}` }],
-                isError: true,
-            };
-        }
-    }
-  );
-
-  server.tool(
-    'get_profile_pic',
-    'Get profile picture URL for a contact or group JID.',
-     {
-      jid: z.string().describe('The JID of the contact or group (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)'),
-    },
-    async ({ jid }): Promise<CallToolResult> => {
-        try {
-            const url = await whatsappService.getProfilePicUrl(jid);
-            if (!url) {
-                 return {
-                    content: [{ type: 'text', text: `Profile picture not found for JID: ${jid}` }],
-                    isError: true,
-                };
-            }
-            return {
-                content: [{ type: 'text', text: JSON.stringify({ jid, url }, null, 2) }],
-            };
-        } catch (error: any) {
-            log.error(`Error in get_profile_pic tool for JID ${jid}:`, error);
-            return {
-                content: [{ type: 'text', text: `Error getting profile picture for ${jid}: ${error.message}` }],
-                isError: true,
-            };
-        }
-    }
-  );
-
-  server.tool(
-    'get_group_info',
-    'Get group metadata and participants by group JID.',
+    "get_contact_by_id",
+    "Get contact details by JID.",
     {
-      group_jid: z.string().describe('The group JID (e.g., 123456789-12345@g.us)'),
+      jid: z
+        .string()
+        .describe(
+          "The JID of the contact to retrieve (e.g., 123456789@s.whatsapp.net)",
+        ),
+    },
+    async ({ jid }): Promise<CallToolResult> => {
+      try {
+        const contact = await whatsappService.getContactById(jid);
+        if (!contact) {
+          return {
+            content: [
+              { type: "text", text: `Contact not found for JID: ${jid}` },
+            ],
+            isError: true, // Indicate not found as an error for the tool
+          };
+        }
+        // Return relevant contact details
+        const contactDetails = {
+          id: contact.id,
+          name: contact.name,
+          number: contact.number,
+          pushname: contact.pushname,
+          isMyContact: contact.isMyContact,
+          isWAContact: contact.isWAContact,
+        };
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(contactDetails, null, 2) },
+          ],
+        };
+      } catch (error: any) {
+        log.error(`Error in get_contact_by_id tool for JID ${jid}:`, error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting contact ${jid}: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "get_profile_pic",
+    "Get profile picture URL for a contact or group JID.",
+    {
+      jid: z
+        .string()
+        .describe(
+          "The JID of the contact or group (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)",
+        ),
+    },
+    async ({ jid }): Promise<CallToolResult> => {
+      try {
+        const url = await whatsappService.getProfilePicUrl(jid);
+        if (!url) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Profile picture not found for JID: ${jid}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        return {
+          content: [
+            { type: "text", text: JSON.stringify({ jid, url }, null, 2) },
+          ],
+        };
+      } catch (error: any) {
+        log.error(`Error in get_profile_pic tool for JID ${jid}:`, error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting profile picture for ${jid}: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "get_group_info",
+    "Get group metadata and participants by group JID.",
+    {
+      group_jid: z
+        .string()
+        .describe("The group JID (e.g., 123456789-12345@g.us)"),
     },
     async ({ group_jid }): Promise<CallToolResult> => {
       try {
         const info = await whatsappService.getGroupInfo(group_jid);
         return {
-          content: [{ type: 'text', text: JSON.stringify(info, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(info, null, 2) }],
         };
       } catch (error: any) {
         log.error(`Error in get_group_info tool for JID ${group_jid}:`, error);
         return {
-          content: [{ type: 'text', text: `Error getting group info for ${group_jid}: ${error.message}` }],
+          content: [
+            {
+              type: "text",
+              text: `Error getting group info for ${group_jid}: ${error.message}`,
+            },
+          ],
           isError: true,
         };
       }
@@ -160,5 +217,5 @@ export function registerContactTools(
 
   // Add other contact-related tools if needed (e.g., get_profile_pic)
 
-  log.info('Contact tools registered.');
+  log.info("Contact tools registered.");
 }

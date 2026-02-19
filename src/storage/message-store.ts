@@ -1,10 +1,10 @@
-import { createRequire } from 'module';
-import fs from 'fs';
-import path from 'path';
-import { log } from '../utils/logger.js';
+import { createRequire } from "module";
+import fs from "fs";
+import path from "path";
+import { log } from "../utils/logger.js";
 
 const require = createRequire(import.meta.url);
-const Database = require('better-sqlite3');
+const Database = require("better-sqlite3");
 
 export interface StoredChat {
   id: string;
@@ -41,8 +41,8 @@ export class MessageStore {
   constructor(dbPath: string) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
+    this.db.pragma("journal_mode = WAL");
+    this.db.pragma("synchronous = NORMAL");
     this.migrate();
   }
 
@@ -183,9 +183,13 @@ export class MessageStore {
   }
 
   stats(): { chats: number; messages: number; media: number } {
-    const chats = this.db.prepare('SELECT COUNT(*) as count FROM chats').get().count as number;
-    const messages = this.db.prepare('SELECT COUNT(*) as count FROM messages').get().count as number;
-    const media = this.db.prepare('SELECT COUNT(*) as count FROM media').get().count as number;
+    const chats = this.db.prepare("SELECT COUNT(*) as count FROM chats").get()
+      .count as number;
+    const messages = this.db
+      .prepare("SELECT COUNT(*) as count FROM messages")
+      .get().count as number;
+    const media = this.db.prepare("SELECT COUNT(*) as count FROM media").get()
+      .count as number;
     return { chats, messages, media };
   }
 
@@ -193,7 +197,7 @@ export class MessageStore {
     try {
       this.db.close();
     } catch (error) {
-      log.warn({ err: error }, 'Failed to close message store');
+      log.warn({ err: error }, "Failed to close message store");
     }
   }
 }
