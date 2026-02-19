@@ -1,73 +1,35 @@
-import { createRequire } from "module";
-import { webcrypto } from "crypto";
 import fs from "fs";
 import path from "path";
 import axios from "axios";
 import { fileTypeFromBuffer } from "file-type";
-import pino from "pino";
 import { log } from "../utils/logger.js";
+import { mapContact, mapMessage, mapStoredMessage } from "../core/mappers.js";
 import {
-  MessageStore,
+  ResolvedContact,
+  SimpleChat,
+  SimpleContact,
+  SimpleMessage,
+} from "../core/types.js";
+import {
   StoredChat,
   StoredMessage,
   StoredMedia,
 } from "../storage/message-store.js";
+import { StoreService } from "../providers/store/store-service.js";
+import { BaileysClient } from "../providers/wa/baileys-client.js";
+import { WhatsAppSync } from "./whatsapp-sync.js";
+
+import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
 const baileys = require("@whiskeysockets/baileys");
 
-if (!(globalThis as any).crypto) {
-  (globalThis as any).crypto = webcrypto;
-}
-
-const makeWASocket = baileys.default;
 const {
   DisconnectReason,
-  fetchLatestBaileysVersion,
-  useMultiFileAuthState,
-  makeInMemoryStore,
   jidNormalizedUser,
   downloadContentFromMessage,
   ALL_WA_PATCH_NAMES,
 } = baileys;
-
-export interface SimpleContact {
-  id: string;
-  name: string | null;
-  pushname: string | null;
-  isMe: boolean;
-  isUser: boolean;
-  isGroup: boolean;
-  isWAContact: boolean;
-  isMyContact: boolean;
-  number: string;
-}
-
-export interface ResolvedContact extends SimpleContact {
-  matchedBy: "name" | "pushname" | "number" | "id";
-  score: number;
-}
-
-export interface SimpleChat {
-  id: string;
-  name: string;
-  isGroup: boolean;
-  lastMessage?: SimpleMessage;
-  unreadCount: number;
-  timestamp: number;
-}
-
-export interface SimpleMessage {
-  id: string;
-  body: string;
-  from: string;
-  to: string;
-  timestamp: number;
-  fromMe: boolean;
-  hasMedia: boolean;
-  mediaKey?: string;
-  type: string;
-}
 
 export interface DownloadedMedia {
   data: Buffer;
@@ -77,16 +39,6 @@ export interface DownloadedMedia {
 }
 
 export class WhatsAppService {
-  private sock: any | null = null;
-  private store: any | null = null;
-  private storePath: string | null = null;
-  private storeFlushTimer: NodeJS.Timeout | null = null;
-  private lastHistorySyncAt: number | null = null;
-  private lastChatsSyncAt: number | null = null;
-  private lastMessagesSyncAt: number | null = null;
-  private warmupTimer: NodeJS.Timeout | null = null;
-  private warmupAttempts = 0;
-  private forcedResync = false;
   private latestQrCode: string | null = null;
   private isAuthenticatedFlag = false;
   private isReadyFlag = false;
@@ -96,27 +48,40 @@ export class WhatsAppService {
   private messagesByChat = new Map<string, any[]>();
   private messageKeyIndex = new Map<string, any>();
   private sessionDir: string;
-  private messageStore: MessageStore | null = null;
+  private storeService: StoreService | null = null;
+  private client: BaileysClient;
+  private sync: WhatsAppSync;
 
   constructor() {
     const baseDir =
       process.env.SESSION_DIR ||
       path.join(process.cwd(), "whatsapp-sessions", "baileys");
     this.sessionDir = baseDir;
-    this.initMessageStore();
+    this.client = new BaileysClient(this.sessionDir);
+    this.initStoreService();
+    this.sync = new WhatsAppSync(
+      this.storeService,
+      () => this.getSocketOptional(),
+      (chat: any) => this.normalizeChatRecord(chat),
+      (msg: any) => this.trackMessage(msg),
+      (chat: any) => this.upsertStoredChat(chat),
+      (msg: any) => this.upsertStoredMessage(msg),
+      async (jid: string, limit: number) =>
+        this.getStoreOptional()?.loadMessages
+          ? await this.getStoreOptional().loadMessages(jid, limit)
+          : [],
+      () =>
+        this.getStoreOptional()?.chats?.all
+          ? this.getStoreOptional().chats.all()
+          : [],
+    );
   }
 
-  private initMessageStore(): void {
-    if (this.messageStore) return;
+  private initStoreService(): void {
+    if (this.storeService) return;
     const dbPath =
       process.env.DB_PATH || path.join(this.sessionDir, "store.sqlite");
-    try {
-      this.messageStore = new MessageStore(dbPath);
-      log.info({ dbPath }, "Message store initialized");
-    } catch (error) {
-      log.warn({ err: error }, "Failed to initialize message store");
-      this.messageStore = null;
-    }
+    this.storeService = new StoreService(dbPath);
   }
 
   private normalizeJid(jid: string): string {
@@ -133,69 +98,9 @@ export class WhatsAppService {
     return `${jid}:${id}`;
   }
 
-  private extractText(message: any): string {
-    if (!message) return "";
-    if (message.conversation) return message.conversation;
-    if (message.extendedTextMessage?.text)
-      return message.extendedTextMessage.text;
-    if (message.imageMessage?.caption) return message.imageMessage.caption;
-    if (message.videoMessage?.caption) return message.videoMessage.caption;
-    if (message.documentMessage?.caption)
-      return message.documentMessage.caption;
-    if (message.buttonsResponseMessage?.selectedDisplayText)
-      return message.buttonsResponseMessage.selectedDisplayText;
-    if (message.listResponseMessage?.title)
-      return message.listResponseMessage.title;
-    if (message.templateButtonReplyMessage?.selectedDisplayText)
-      return message.templateButtonReplyMessage.selectedDisplayText;
-    if (message.reactionMessage?.text)
-      return `reacted: ${message.reactionMessage.text}`;
-    return "";
-  }
-
-  private mapMessage(msg: any): SimpleMessage {
-    const id = this.serializeMessageId(msg);
-    const jid = msg?.key?.remoteJid || "";
-    const fromMe = Boolean(msg?.key?.fromMe);
-    const timestamp = Number(msg?.messageTimestamp || 0) * 1000;
-    const message = msg?.message || {};
-    const body = this.extractText(message);
-    const hasMedia = Boolean(
-      message.imageMessage ||
-        message.videoMessage ||
-        message.audioMessage ||
-        message.documentMessage ||
-        message.stickerMessage,
-    );
-
-    return {
-      id,
-      body,
-      from: fromMe ? "me" : msg?.key?.participant || jid,
-      to: jid,
-      timestamp,
-      fromMe,
-      hasMedia,
-      type: Object.keys(message)[0] || "unknown",
-    };
-  }
-
-  private mapStoredMessage(msg: StoredMessage): SimpleMessage {
-    return {
-      id: msg.id,
-      body: msg.body,
-      from: msg.from,
-      to: msg.to,
-      timestamp: msg.timestamp,
-      fromMe: Boolean(msg.from_me),
-      hasMedia: Boolean(msg.has_media),
-      type: msg.type || "unknown",
-    };
-  }
-
   private upsertStoredMessage(msg: any): void {
-    if (!this.messageStore) return;
-    const mapped = this.mapMessage(msg);
+    if (!this.storeService) return;
+    const mapped = mapMessage(msg, this.serializeMessageId.bind(this));
     const record: StoredMessage = {
       id: mapped.id,
       chat_jid: mapped.to,
@@ -207,11 +112,11 @@ export class WhatsAppService {
       has_media: mapped.hasMedia ? 1 : 0,
       type: mapped.type,
     };
-    this.messageStore.upsertMessage(record);
+    this.storeService.upsertMessage(record);
   }
 
   private upsertStoredChat(chat: any): void {
-    if (!this.messageStore) return;
+    if (!this.storeService) return;
     const id = chat?.id || chat?.jid;
     if (!id) return;
     const record: StoredChat = {
@@ -221,7 +126,7 @@ export class WhatsAppService {
       unread_count: chat?.unreadCount || 0,
       timestamp: Number(chat?.conversationTimestamp || 0) * 1000,
     };
-    this.messageStore.upsertChat(record);
+    this.storeService.upsertChat(record);
   }
 
   private normalizeChatRecord(chat: any): any | null {
@@ -279,71 +184,18 @@ export class WhatsAppService {
       return;
     }
 
-    this.initMessageStore();
+    this.initStoreService();
 
     this.initializing = (async () => {
-      fs.mkdirSync(this.sessionDir, { recursive: true });
-      const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
-
-      const { version } = await fetchLatestBaileysVersion();
-      const logger = (pino as unknown as (opts: any) => any)({
-        level: "silent",
+      await this.client.initialize(async (key: any) => {
+        const cached = key?.id ? this.messageKeyIndex.get(key.id) : undefined;
+        return cached?.message;
       });
 
-      if (typeof makeInMemoryStore === "function") {
-        this.store = makeInMemoryStore({ logger });
-        this.storePath =
-          process.env.STORE_PATH || path.join(this.sessionDir, "store.json");
-        try {
-          if (
-            this.storePath &&
-            fs.existsSync(this.storePath) &&
-            this.store?.readFromFile
-          ) {
-            this.store.readFromFile(this.storePath);
-            log.info(
-              { storePath: this.storePath },
-              "Loaded WhatsApp store from disk",
-            );
-          }
-        } catch (error) {
-          log.warn({ err: error }, "Failed to load WhatsApp store from disk");
-        }
-        if (this.store?.writeToFile) {
-          this.storeFlushTimer = setInterval(() => {
-            try {
-              if (this.storePath) {
-                this.store.writeToFile(this.storePath);
-              }
-            } catch (error) {
-              log.warn({ err: error }, "Failed to persist WhatsApp store");
-            }
-          }, 10000);
-        }
-      } else {
-        this.store = null;
-      }
+      const sock = this.client.getSocket();
+      const store = this.client.getStoreOptional();
 
-      this.sock = makeWASocket({
-        version,
-        auth: state,
-        printQRInTerminal: false,
-        logger,
-        syncFullHistory: true,
-        browser: ["MCP", "Desktop", "1.0.0"],
-        getMessage: async (key: any) => {
-          const cached = key?.id ? this.messageKeyIndex.get(key.id) : undefined;
-          return cached?.message;
-        },
-      });
-
-      if (this.store?.bind) {
-        this.store.bind(this.sock.ev);
-      }
-
-      this.sock.ev.on("creds.update", saveCreds);
-
-      this.sock.ev.on("connection.update", (update: any) => {
+      sock.ev.on("connection.update", (update: any) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (connection) {
@@ -360,7 +212,7 @@ export class WhatsAppService {
           this.isReadyFlag = true;
           this.latestQrCode = null;
           log.info("WhatsApp connection opened.");
-          this.scheduleWarmup();
+          this.sync.scheduleWarmup(() => this.forceResync());
         }
 
         if (connection === "close") {
@@ -369,7 +221,6 @@ export class WhatsAppService {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
           const reason = lastDisconnect?.error?.message;
           log.warn({ statusCode, reason }, "WhatsApp connection closed.");
-          this.sock = null;
           if (statusCode === DisconnectReason.loggedOut) {
             log.warn("WhatsApp logged out. Clearing session.");
             try {
@@ -403,7 +254,7 @@ export class WhatsAppService {
         }
       });
 
-      this.sock.ev.on("messages.upsert", (ev: any) => {
+      sock.ev.on("messages.upsert", (ev: any) => {
         if (!ev?.messages) return;
         for (const msg of ev.messages) {
           this.trackMessage(msg);
@@ -411,7 +262,7 @@ export class WhatsAppService {
         }
       });
 
-      this.sock.ev.on("messages.update", (updates: any[]) => {
+      sock.ev.on("messages.update", (updates: any[]) => {
         if (!updates) return;
         for (const update of updates) {
           const key =
@@ -425,115 +276,36 @@ export class WhatsAppService {
         }
       });
 
-      this.sock.ev.on("chats.set", (payload: any) => {
-        if (payload?.chats && Array.isArray(payload.chats)) {
-          const validChats = payload.chats
-            .map((chat: any) => this.normalizeChatRecord(chat))
-            .filter((chat: any) => chat?.id);
-          if (validChats.length && this.store?.chats?.insert) {
-            try {
-              this.store.chats.insert(validChats);
-            } catch (error) {
-              log.warn({ err: error }, "Failed to insert chats into store");
-            }
-          }
-          for (const chat of validChats) {
-            this.upsertStoredChat(chat);
-          }
-          this.lastChatsSyncAt = Date.now();
-          log.info({ count: validChats.length }, "Chats synced");
-        }
+      sock.ev.on("chats.set", (payload: any) => {
+        this.sync.handleChatsSet(payload, store);
       });
 
-      this.sock.ev.on("messages.set", (payload: any) => {
-        if (payload?.messages && Array.isArray(payload.messages)) {
-          for (const msg of payload.messages) {
-            this.trackMessage(msg);
-            this.upsertStoredMessage(msg);
-          }
-        }
-        if (payload?.messages && Array.isArray(payload.messages)) {
-          this.lastMessagesSyncAt = Date.now();
-        }
-        if (payload?.messages && Array.isArray(payload.messages)) {
-          log.info({ count: payload.messages.length }, "Messages synced");
-        }
+      sock.ev.on("messages.set", (payload: any) => {
+        this.sync.handleMessagesSet(payload);
       });
 
-      this.sock.ev.on("chats.upsert", (payload: any) => {
-        if (payload && Array.isArray(payload)) {
-          for (const chat of payload) {
-            this.upsertStoredChat(chat);
-          }
-          this.lastChatsSyncAt = Date.now();
-          log.info({ count: payload.length }, "Chats upsert");
-        }
+      sock.ev.on("chats.upsert", (payload: any) => {
+        this.sync.handleChatsUpsert(payload);
       });
 
-      this.sock.ev.on("chats.update", (payload: any) => {
-        if (payload && Array.isArray(payload)) {
-          for (const chat of payload) {
-            this.upsertStoredChat(chat);
-          }
-          this.lastChatsSyncAt = Date.now();
-          log.info({ count: payload.length }, "Chats update");
-        }
+      sock.ev.on("chats.update", (payload: any) => {
+        this.sync.handleChatsUpdate(payload);
       });
 
-      this.sock.ev.on("contacts.upsert", (payload: any) => {
+      sock.ev.on("contacts.upsert", (payload: any) => {
         if (payload && Array.isArray(payload)) {
           log.info({ count: payload.length }, "Contacts upsert");
         }
       });
 
-      this.sock.ev.on("contacts.update", (payload: any) => {
+      sock.ev.on("contacts.update", (payload: any) => {
         if (payload && Array.isArray(payload)) {
           log.info({ count: payload.length }, "Contacts update");
         }
       });
 
-      this.sock.ev.on("messaging-history.set", (payload: any) => {
-        const { chats, contacts, messages } = payload || {};
-        if (chats && Array.isArray(chats)) {
-          const validChats = chats
-            .map((chat: any) => this.normalizeChatRecord(chat))
-            .filter((chat: any) => chat?.id);
-          if (validChats.length && this.store?.chats?.insert) {
-            try {
-              this.store.chats.insert(validChats);
-            } catch (error) {
-              log.warn(
-                { err: error },
-                "Failed to insert history chats into store",
-              );
-            }
-          }
-          for (const chat of validChats) {
-            this.upsertStoredChat(chat);
-          }
-        }
-        if (contacts && this.store?.contacts) {
-          for (const contact of contacts) {
-            if (contact?.id) {
-              this.store.contacts[contact.id] = contact;
-            }
-          }
-        }
-        if (messages && Array.isArray(messages)) {
-          for (const msg of messages) {
-            this.trackMessage(msg);
-            this.upsertStoredMessage(msg);
-          }
-        }
-        this.lastHistorySyncAt = Date.now();
-        log.info(
-          {
-            chats: Array.isArray(chats) ? chats.length : 0,
-            contacts: Array.isArray(contacts) ? contacts.length : 0,
-            messages: Array.isArray(messages) ? messages.length : 0,
-          },
-          "Messaging history synced",
-        );
+      sock.ev.on("messaging-history.set", (payload: any) => {
+        this.sync.handleMessagingHistorySet(payload, store);
       });
     })().finally(() => {
       this.initializing = null;
@@ -558,42 +330,31 @@ export class WhatsAppService {
   }
 
   async forceResync(): Promise<void> {
-    this.forcedResync = true;
-    if (this.sock?.authState?.keys?.set) {
-      const resetMap: Record<string, null> = {};
-      for (const name of ALL_WA_PATCH_NAMES) {
-        resetMap[name] = null;
+    await this.sync.forceResync(async () => {
+      const sock = this.getSocketOptional();
+      if (sock?.authState?.keys?.set) {
+        const resetMap: Record<string, null> = {};
+        for (const name of ALL_WA_PATCH_NAMES) {
+          resetMap[name] = null;
+        }
+        await sock.authState.keys.set({
+          "app-state-sync-version": resetMap,
+        });
+        log.info("Force resync: reset app state versions");
       }
-      await this.sock.authState.keys.set({
-        "app-state-sync-version": resetMap,
-      });
-      log.info("Force resync: reset app state versions");
-    }
-    if (this.sock?.authState?.creds) {
-      this.sock.authState.creds.accountSyncCounter = 0;
-      this.sock.ev.emit("creds.update", { accountSyncCounter: 0 });
-      log.info("Force resync: reset account sync counter");
-    }
+      if (sock?.authState?.creds) {
+        sock.authState.creds.accountSyncCounter = 0;
+        sock.ev.emit("creds.update", { accountSyncCounter: 0 });
+        log.info("Force resync: reset account sync counter");
+      }
+    });
     await this.destroy();
     await this.initialize();
   }
 
   async destroy(): Promise<void> {
-    if (!this.sock) return;
-    try {
-      this.sock.end(new Error("Client destroyed"));
-    } catch (_error) {
-      // Ignore
-    }
-    if (this.storeFlushTimer) {
-      clearInterval(this.storeFlushTimer);
-      this.storeFlushTimer = null;
-    }
-    if (this.warmupTimer) {
-      clearInterval(this.warmupTimer);
-      this.warmupTimer = null;
-    }
-    this.sock = null;
+    await this.client.destroy();
+    this.sync.clearWarmupTimer();
     this.isAuthenticatedFlag = false;
     this.isReadyFlag = false;
     this.latestQrCode = null;
@@ -629,18 +390,20 @@ export class WhatsAppService {
     warmupAttempts: number;
     warmupInProgress: boolean;
   } {
-    const chatCount = this.store?.chats?.all
-      ? this.store.chats.all().length
+    const store = this.getStoreOptional();
+    const chatCount = store?.chats?.all
+      ? store.chats.all().length
       : this.messagesByChat.size;
     const messageCount = this.messageIndex.size;
+    const syncStats = this.sync.getStats();
     return {
       chatCount,
       messageCount,
-      lastHistorySyncAt: this.lastHistorySyncAt,
-      lastChatsSyncAt: this.lastChatsSyncAt,
-      lastMessagesSyncAt: this.lastMessagesSyncAt,
-      warmupAttempts: this.warmupAttempts,
-      warmupInProgress: Boolean(this.warmupTimer),
+      lastHistorySyncAt: syncStats.lastHistorySyncAt,
+      lastChatsSyncAt: syncStats.lastChatsSyncAt,
+      lastMessagesSyncAt: syncStats.lastMessagesSyncAt,
+      warmupAttempts: syncStats.warmupAttempts,
+      warmupInProgress: syncStats.warmupInProgress,
     };
   }
 
@@ -649,110 +412,35 @@ export class WhatsAppService {
     messages: number;
     media: number;
   } | null {
-    if (!this.messageStore) return null;
-    return this.messageStore.stats();
-  }
-
-  private scheduleWarmup(): void {
-    if (this.warmupTimer) return;
-    this.warmupAttempts = 0;
-    this.warmupTimer = setInterval(() => {
-      this.warmupAttempts += 1;
-      const chatCount = this.store?.chats?.all
-        ? this.store.chats.all().length
-        : 0;
-      log.info({ attempt: this.warmupAttempts, chatCount }, "Warmup tick");
-      if (chatCount > 0 || this.warmupAttempts > 5) {
-        if (this.warmupTimer) {
-          clearInterval(this.warmupTimer);
-          this.warmupTimer = null;
-        }
-        return;
-      }
-      this.warmup().catch((err) => log.warn({ err }, "Warmup failed"));
-    }, 10000);
-  }
-
-  private async warmup(): Promise<void> {
-    if (!this.sock) return;
-    try {
-      log.info("Warmup started");
-      const initialChats = this.store?.chats?.all ? this.store.chats.all() : [];
-      if (
-        (!initialChats || initialChats.length === 0) &&
-        typeof this.sock.resyncAppState === "function"
-      ) {
-        try {
-          if (this.sock.authState?.keys?.set) {
-            const resetMap: Record<string, null> = {};
-            for (const name of ALL_WA_PATCH_NAMES) {
-              resetMap[name] = null;
-            }
-            await this.sock.authState.keys.set({
-              "app-state-sync-version": resetMap,
-            });
-            log.info("Warmup reset app state versions");
-          }
-          if (this.sock.authState?.creds) {
-            this.sock.authState.creds.accountSyncCounter = 0;
-            this.sock.ev.emit("creds.update", { accountSyncCounter: 0 });
-            log.info("Warmup reset account sync counter");
-          }
-          await this.sock.resyncAppState(ALL_WA_PATCH_NAMES, true);
-          log.info("Warmup requested app state resync");
-        } catch (error) {
-          log.warn({ err: error }, "Warmup app state resync failed");
-        }
-      }
-
-      const chats = this.store?.chats?.all ? this.store.chats.all() : [];
-      if (chats?.length && this.store?.loadMessages) {
-        const targets = chats
-          .map((c: any) => c?.id || c?.jid)
-          .filter((jid: string) => Boolean(jid))
-          .slice(0, 10);
-        for (const jid of targets) {
-          const msgs = await this.store.loadMessages(jid, 20);
-          if (msgs?.length) {
-            msgs.forEach((msg: any) => this.trackMessage(msg));
-          }
-        }
-      }
-      const chatCount = chats?.length || 0;
-      log.info(
-        { chatCount, messageCount: this.messageIndex.size },
-        "Warmup completed",
-      );
-      if (chatCount === 0 && !this.forcedResync && this.warmupAttempts >= 2) {
-        log.warn("Warmup still empty, forcing resync");
-        await this.forceResync();
-      }
-    } catch (error) {
-      log.warn({ err: error }, "Warmup failed");
-    }
+    if (!this.storeService) return null;
+    return this.storeService.stats();
   }
 
   async runWarmup(): Promise<{ chatCount: number; messageCount: number }> {
-    await this.warmup();
-    const chatCount = this.store?.chats?.all
-      ? this.store.chats.all().length
-      : 0;
-    const messageCount = this.messageIndex.size;
-    return { chatCount, messageCount };
+    return this.sync.runWarmup(
+      () => this.messageIndex.size,
+      () => this.forceResync(),
+    );
   }
 
   getSocket(): any {
-    if (!this.sock) {
-      throw new Error("WhatsApp socket not initialized");
-    }
-    return this.sock;
+    return this.client.getSocket();
+  }
+
+  private getSocketOptional(): any | null {
+    return this.client.getSocketOptional();
+  }
+
+  private getStoreOptional(): any | null {
+    return this.client.getStoreOptional();
   }
 
   async listChats(
     limit = 20,
     includeLastMessage = true,
   ): Promise<SimpleChat[]> {
-    if (!this.store?.chats?.all) {
+    const store = this.getStoreOptional();
+    if (!store?.chats?.all) {
       const chatIds = Array.from(this.messagesByChat.keys());
       const chats = chatIds.map((jid) => ({ id: jid }));
       return chats.slice(0, limit).map((chat) => ({
@@ -764,17 +452,17 @@ export class WhatsAppService {
       }));
     }
 
-    const chats = this.store.chats.all();
-    if ((!chats || chats.length === 0) && this.store?.loadChats) {
+    const chats = store.chats.all();
+    if ((!chats || chats.length === 0) && store?.loadChats) {
       try {
-        const loaded = await this.store.loadChats();
-        if (loaded?.length && this.store?.chats?.insert) {
+        const loaded = await store.loadChats();
+        if (loaded?.length && store?.chats?.insert) {
           const valid = loaded
             .map((chat: any) => this.normalizeChatRecord(chat))
             .filter((chat: any) => chat?.id);
           if (valid.length) {
             try {
-              this.store.chats.insert(valid);
+              store.chats.insert(valid);
             } catch (_error) {
               // Ignore
             }
@@ -784,13 +472,13 @@ export class WhatsAppService {
         // Ignore
       }
     }
-    const effectiveChats = this.store.chats.all();
+    const effectiveChats = store.chats.all();
     if (effectiveChats.length === 0) {
-      await this.warmup();
+      await this.sync.warmup(() => this.forceResync());
     }
-    const refreshedChats = this.store.chats.all();
-    if (refreshedChats.length === 0 && this.messageStore) {
-      const stored = this.messageStore.listChats(limit);
+    const refreshedChats = store.chats.all();
+    if (refreshedChats.length === 0 && this.storeService) {
+      const stored = this.storeService.listChats(limit);
       return stored.map((chat) => ({
         id: chat.id,
         name: chat.name,
@@ -833,8 +521,9 @@ export class WhatsAppService {
 
   async getChatById(jid: string): Promise<SimpleChat | null> {
     const normalized = this.normalizeJid(jid);
-    if (this.store?.chats?.get) {
-      const chat = this.store.chats.get(normalized);
+    const store = this.getStoreOptional();
+    if (store?.chats?.get) {
+      const chat = store.chats.get(normalized);
       if (!chat) return null;
       const lastMessage = this.getLastMessageForChat(normalized);
       return {
@@ -847,8 +536,8 @@ export class WhatsAppService {
       };
     }
 
-    if (this.messageStore) {
-      const stored = this.messageStore.getChatById(normalized);
+    if (this.storeService) {
+      const stored = this.storeService.getChatById(normalized);
       if (!stored) return null;
       return {
         id: stored.id,
@@ -865,20 +554,25 @@ export class WhatsAppService {
 
   async getMessages(jid: string, limit = 50): Promise<SimpleMessage[]> {
     const normalized = this.normalizeJid(jid);
-    if (this.store?.loadMessages) {
-      const raw = await this.store.loadMessages(normalized, limit);
+    const store = this.getStoreOptional();
+    if (store?.loadMessages) {
+      const raw = await store.loadMessages(normalized, limit);
       raw.forEach((msg: any) => this.trackMessage(msg));
       if (raw.length > 0) {
-        return raw.map((msg: any) => this.mapMessage(msg));
+        return raw.map((msg: any) =>
+          mapMessage(msg, this.serializeMessageId.bind(this)),
+        );
       }
     }
     const list = this.messagesByChat.get(normalized) || [];
     if (list.length > 0) {
-      return list.slice(-limit).map((msg) => this.mapMessage(msg));
+      return list
+        .slice(-limit)
+        .map((msg) => mapMessage(msg, this.serializeMessageId.bind(this)));
     }
-    if (this.messageStore) {
-      const stored = this.messageStore.listMessages(normalized, limit);
-      return stored.map((msg) => this.mapStoredMessage(msg));
+    if (this.storeService) {
+      const stored = this.storeService.listMessages(normalized, limit);
+      return stored.map((msg) => mapStoredMessage(msg));
     }
     return [];
   }
@@ -891,14 +585,14 @@ export class WhatsAppService {
     messages: SimpleMessage[];
     media: StoredMedia[];
   }> {
-    if (!this.messageStore) {
+    if (!this.storeService) {
       return { chat: null, messages: [], media: [] };
     }
     const chat = await this.getChatById(jid);
-    const messages = this.messageStore
+    const messages = this.storeService
       .listMessagesAll(jid)
-      .map((msg) => this.mapStoredMessage(msg));
-    const media = includeMedia ? this.messageStore.listMediaByChat(jid) : [];
+      .map((msg) => mapStoredMessage(msg));
+    const media = includeMedia ? this.storeService.listMediaByChat(jid) : [];
     return { chat, messages, media };
   }
 
@@ -912,7 +606,7 @@ export class WhatsAppService {
 
     const searchList = (msgs: any[]) => {
       for (const msg of msgs) {
-        const mapped = this.mapMessage(msg);
+        const mapped = mapMessage(msg, this.serializeMessageId.bind(this));
         if (mapped.body && mapped.body.toLowerCase().includes(q)) {
           results.push(mapped);
         }
@@ -921,8 +615,9 @@ export class WhatsAppService {
 
     if (chatId) {
       const normalized = this.normalizeJid(chatId);
-      if (this.store?.loadMessages) {
-        const raw = await this.store.loadMessages(
+      const store = this.getStoreOptional();
+      if (store?.loadMessages) {
+        const raw = await store.loadMessages(
           normalized,
           Math.max(50, limit * 5),
         );
@@ -937,9 +632,9 @@ export class WhatsAppService {
       searchList(all);
     }
 
-    if (results.length === 0 && this.messageStore && !chatId) {
-      const stored = this.messageStore.searchMessages(query, limit);
-      return stored.map((msg) => this.mapStoredMessage(msg));
+    if (results.length === 0 && this.storeService && !chatId) {
+      const stored = this.storeService.searchMessages(query, limit);
+      return stored.map((msg) => mapStoredMessage(msg));
     }
 
     results.sort((a, b) => b.timestamp - a.timestamp);
@@ -949,7 +644,7 @@ export class WhatsAppService {
   async getMessageById(messageId: string): Promise<SimpleMessage | null> {
     const msg = this.messageIndex.get(messageId);
     if (!msg) return null;
-    return this.mapMessage(msg);
+    return mapMessage(msg, this.serializeMessageId.bind(this));
   }
 
   async getProfilePicUrl(jid: string): Promise<string | null> {
@@ -1038,8 +733,9 @@ export class WhatsAppService {
       if (parts.length >= 2) {
         const jid = parts[0];
         const keyId = parts.slice(1).join(":");
-        if (this.store?.loadMessages) {
-          const loaded = await this.store.loadMessages(jid, 50);
+        const store = this.getStoreOptional();
+        if (store?.loadMessages) {
+          const loaded = await store.loadMessages(jid, 50);
           msg = loaded.find((m: any) => m?.key?.id === keyId);
         } else {
           const list = this.messagesByChat.get(jid) || [];
@@ -1084,8 +780,8 @@ export class WhatsAppService {
     }
     const data = Buffer.concat(chunks);
 
-    if (this.messageStore) {
-      const existing = this.messageStore.getMediaByMessageId(messageId);
+    if (this.storeService) {
+      const existing = this.storeService.getMediaByMessageId(messageId);
       if (!existing) {
         const mediaDir =
           process.env.MEDIA_DIR || path.join(process.cwd(), "media");
@@ -1108,7 +804,7 @@ export class WhatsAppService {
             mimetype: content.mimetype || "application/octet-stream",
             size: data.length,
           };
-          this.messageStore.upsertMedia(record);
+          this.storeService.upsertMedia(record);
         } catch (error) {
           log.warn({ err: error }, "Failed to persist media file");
         }
@@ -1125,28 +821,30 @@ export class WhatsAppService {
 
   async searchContacts(query: string): Promise<SimpleContact[]> {
     const q = query.toLowerCase();
-    if (!this.store?.contacts) return [];
+    const store = this.getStoreOptional();
+    if (!store?.contacts) return [];
 
-    const contacts = Object.values(this.store.contacts) as any[];
+    const contacts = Object.values(store.contacts) as any[];
     return contacts
       .filter((contact) => {
         const name = (contact?.name || contact?.notify || "").toLowerCase();
         const id = String(contact?.id || "").toLowerCase();
         return name.includes(q) || id.includes(q);
       })
-      .map((contact) => this.mapContact(contact));
+      .map((contact) => mapContact(contact));
   }
 
   async resolveContacts(query: string, limit = 5): Promise<ResolvedContact[]> {
     const text = query.trim().toLowerCase();
-    if (!text || !this.store?.contacts) return [];
+    const store = this.getStoreOptional();
+    if (!text || !store?.contacts) return [];
 
     const digits = text.replace(/[^\d]/g, "");
     const hasDigits = digits.length >= 6;
 
-    const contacts = Object.values(this.store.contacts) as any[];
+    const contacts = Object.values(store.contacts) as any[];
     const scored = contacts.map((contact) => {
-      const mapped = this.mapContact(contact);
+      const mapped = mapContact(contact);
       const name = (mapped.name || "").toLowerCase();
       const push = (mapped.pushname || "").toLowerCase();
       const id = String(mapped.id || "").toLowerCase();
@@ -1221,38 +919,23 @@ export class WhatsAppService {
   }
 
   async getContactById(jid: string): Promise<SimpleContact | null> {
-    if (!this.store?.contacts) return null;
-    const contact = this.store.contacts[jid];
+    const store = this.getStoreOptional();
+    if (!store?.contacts) return null;
+    const contact = store.contacts[jid];
     if (!contact) return null;
-    return this.mapContact(contact);
-  }
-
-  private mapContact(contact: any): SimpleContact {
-    const id = contact?.id || "";
-    const number = String(id).split("@")[0] || "";
-    return {
-      id,
-      name: contact?.name || contact?.notify || null,
-      pushname: contact?.notify || null,
-      isMe: false,
-      isUser: true,
-      isGroup: String(id).endsWith("@g.us"),
-      isWAContact: true,
-      isMyContact: true,
-      number,
-    };
+    return mapContact(contact);
   }
 
   private getLastMessageForChat(jid: string): SimpleMessage | undefined {
     const list = this.messagesByChat.get(jid) || [];
     const last = list[list.length - 1];
     if (last) {
-      return this.mapMessage(last);
+      return mapMessage(last, this.serializeMessageId.bind(this));
     }
-    if (this.messageStore) {
-      const stored = this.messageStore.listMessages(jid, 1);
+    if (this.storeService) {
+      const stored = this.storeService.listMessages(jid, 1);
       if (stored.length > 0) {
-        return this.mapStoredMessage(stored[0]);
+        return mapStoredMessage(stored[0]);
       }
     }
     return undefined;
