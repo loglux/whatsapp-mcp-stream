@@ -13,6 +13,8 @@ import {
 import {
   StoredChat,
   StoredContact,
+  StoredGroupMeta,
+  StoredGroupParticipant,
   StoredMessage,
   StoredMedia,
 } from "../storage/message-store.js";
@@ -145,6 +147,56 @@ export class WhatsAppService {
       updated_at: Date.now(),
     };
     this.storeService.upsertContact(record);
+  }
+
+  private persistGroupMetadata(metadata: any): void {
+    if (!this.storeService || !metadata) return;
+    const jid = metadata?.id;
+    if (!jid) return;
+    const record: StoredGroupMeta = {
+      jid,
+      subject: metadata?.subject || null,
+      owner: metadata?.owner || null,
+      subject_owner: metadata?.subjectOwner || null,
+      size: typeof metadata?.size === "number" ? metadata.size : null,
+      creation:
+        typeof metadata?.creation === "number" ? metadata.creation : null,
+      desc: metadata?.desc || null,
+      updated_at: Date.now(),
+    };
+    this.storeService.upsertGroupMeta(record);
+
+    const participants = Array.isArray(metadata?.participants)
+      ? metadata.participants.map((p: any) => ({
+          group_jid: jid,
+          participant_jid: p?.id || "",
+          admin: p?.admin || null,
+          updated_at: Date.now(),
+        }))
+      : [];
+    if (participants.length) {
+      this.storeService.replaceGroupParticipants(jid, participants);
+    }
+  }
+
+  private getCachedGroupInfo(groupJid: string): any | null {
+    if (!this.storeService) return null;
+    const meta = this.storeService.getGroupMeta(groupJid);
+    if (!meta) return null;
+    const participants = this.storeService.listGroupParticipants(groupJid);
+    return {
+      id: meta.jid,
+      subject: meta.subject,
+      owner: meta.owner,
+      subjectOwner: meta.subject_owner,
+      size: meta.size,
+      creation: meta.creation,
+      desc: meta.desc,
+      participants: participants.map((p: StoredGroupParticipant) => ({
+        id: p.participant_jid,
+        admin: p.admin,
+      })),
+    };
   }
 
   private normalizeChatRecord(chat: any): any | null {
@@ -689,13 +741,60 @@ export class WhatsAppService {
   async getGroupInfo(groupJid: string): Promise<any> {
     const socket = this.getSocket();
     const normalized = this.normalizeJid(groupJid);
-    const metadata = await socket.groupMetadata(normalized);
-    return metadata;
+    try {
+      const metadata = await socket.groupMetadata(normalized);
+      this.persistGroupMetadata(metadata);
+      return metadata;
+    } catch (error: any) {
+      if (this.storeService) {
+        const cached = this.getCachedGroupInfo(normalized);
+        if (cached) {
+          return { ...cached, source: "cached" };
+        }
+      }
+      throw error;
+    }
   }
 
   async sendMessage(jid: string, message: string): Promise<any> {
     const socket = this.getSocket();
-    return await socket.sendMessage(jid, { text: message });
+    const normalized = this.normalizeJid(jid);
+    const isGroup = normalized.endsWith("@g.us");
+    try {
+      return await socket.sendMessage(normalized, { text: message });
+    } catch (error: any) {
+      const msg = String(error?.message || error);
+      const statusCode = error?.output?.statusCode;
+      if (
+        isGroup &&
+        (msg.toLowerCase().includes("forbidden") || statusCode === 403)
+      ) {
+        try {
+          await socket.groupMetadata(normalized);
+        } catch (metaErr) {
+          log.warn(
+            { err: metaErr, jid: normalized },
+            "Failed to refresh group metadata before retry",
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        try {
+          return await socket.sendMessage(normalized, { text: message });
+        } catch (retryErr: any) {
+          log.error(
+            { err: retryErr, jid: normalized },
+            "Failed to send WhatsApp message after retry",
+          );
+          throw retryErr;
+        }
+      }
+
+      log.error(
+        { err: error, jid: normalized },
+        "Failed to send WhatsApp message",
+      );
+      throw error;
+    }
   }
 
   async sendMedia(

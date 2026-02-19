@@ -8,6 +8,8 @@ services:
     environment:
       # Logging level: fatal, error, warn, info, debug, trace
       - LOG_LEVEL=debug
+      # Baileys logging level: silent, fatal, error, warn, info, debug, trace
+      - BAILEYS_LOG_LEVEL=info
 
       # Transport type: stdio, sse, or http (streamable HTTP)
       - TRANSPORT=http

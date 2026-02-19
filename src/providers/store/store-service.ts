@@ -2,6 +2,8 @@ import {
   MessageStore,
   StoredChat,
   StoredContact,
+  StoredGroupMeta,
+  StoredGroupParticipant,
   StoredMedia,
   StoredMessage,
 } from "../../storage/message-store.js";
@@ -86,5 +88,24 @@ export class StoreService {
 
   searchContacts(query: string, limit = 20): StoredContact[] {
     return this.messageStore ? this.messageStore.searchContacts(query, limit) : [];
+  }
+
+  upsertGroupMeta(meta: StoredGroupMeta): void {
+    this.messageStore?.upsertGroupMeta(meta);
+  }
+
+  getGroupMeta(jid: string): StoredGroupMeta | null {
+    return this.messageStore ? this.messageStore.getGroupMeta(jid) : null;
+  }
+
+  replaceGroupParticipants(
+    groupJid: string,
+    participants: StoredGroupParticipant[],
+  ): void {
+    this.messageStore?.replaceGroupParticipants(groupJid, participants);
+  }
+
+  listGroupParticipants(jid: string): StoredGroupParticipant[] {
+    return this.messageStore ? this.messageStore.listGroupParticipants(jid) : [];
   }
 }

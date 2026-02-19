@@ -33,7 +33,8 @@ export class BaileysClient {
     const { state, saveCreds } = await useMultiFileAuthState(this.sessionDir);
 
     const { version } = await fetchLatestBaileysVersion();
-    const logger = (pino as unknown as (opts: any) => any)({ level: "silent" });
+    const logLevel = process.env.BAILEYS_LOG_LEVEL || "silent";
+    const logger = (pino as unknown as (opts: any) => any)({ level: logLevel });
 
     if (typeof makeInMemoryStore === "function") {
       this.store = makeInMemoryStore({ logger });

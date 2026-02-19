@@ -45,6 +45,24 @@ export interface StoredContact {
   updated_at: number;
 }
 
+export interface StoredGroupMeta {
+  jid: string;
+  subject: string | null;
+  owner: string | null;
+  subject_owner: string | null;
+  size: number | null;
+  creation: number | null;
+  desc: string | null;
+  updated_at: number;
+}
+
+export interface StoredGroupParticipant {
+  group_jid: string;
+  participant_jid: string;
+  admin: string | null;
+  updated_at: number;
+}
+
 export class MessageStore {
   private db: any;
 
@@ -98,12 +116,32 @@ export class MessageStore {
         updated_at INTEGER
       );
 
+      CREATE TABLE IF NOT EXISTS group_metadata (
+        jid TEXT PRIMARY KEY,
+        subject TEXT,
+        owner TEXT,
+        subject_owner TEXT,
+        size INTEGER,
+        creation INTEGER,
+        desc TEXT,
+        updated_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS group_participants (
+        group_jid TEXT,
+        participant_jid TEXT,
+        admin TEXT,
+        updated_at INTEGER,
+        PRIMARY KEY (group_jid, participant_jid)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_media_chat ON media(chat_jid);
 
       CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_jid, timestamp DESC);
 
       CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
       CREATE INDEX IF NOT EXISTS idx_contacts_number ON contacts(number);
+      CREATE INDEX IF NOT EXISTS idx_group_participants_group ON group_participants(group_jid);
     `;
     this.db.exec(sql);
   }
@@ -235,6 +273,62 @@ export class MessageStore {
     );
     const q = `%${query}%`;
     return stmt.all(q, q, q, q, limit);
+  }
+
+  upsertGroupMeta(meta: StoredGroupMeta): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO group_metadata (jid, subject, owner, subject_owner, size, creation, desc, updated_at)
+       VALUES (@jid, @subject, @owner, @subject_owner, @size, @creation, @desc, @updated_at)
+       ON CONFLICT(jid) DO UPDATE SET
+         subject=COALESCE(excluded.subject, group_metadata.subject),
+         owner=COALESCE(excluded.owner, group_metadata.owner),
+         subject_owner=COALESCE(excluded.subject_owner, group_metadata.subject_owner),
+         size=COALESCE(excluded.size, group_metadata.size),
+         creation=COALESCE(excluded.creation, group_metadata.creation),
+         desc=COALESCE(excluded.desc, group_metadata.desc),
+         updated_at=excluded.updated_at`,
+    );
+    stmt.run(meta);
+  }
+
+  getGroupMeta(jid: string): StoredGroupMeta | null {
+    const stmt = this.db.prepare(
+      `SELECT jid, subject, owner, subject_owner, size, creation, desc, updated_at
+       FROM group_metadata
+       WHERE jid = ?`,
+    );
+    return stmt.get(jid) || null;
+  }
+
+  replaceGroupParticipants(
+    groupJid: string,
+    participants: StoredGroupParticipant[],
+  ): void {
+    const del = this.db.prepare(
+      `DELETE FROM group_participants WHERE group_jid = ?`,
+    );
+    const ins = this.db.prepare(
+      `INSERT OR REPLACE INTO group_participants
+       (group_jid, participant_jid, admin, updated_at)
+       VALUES (@group_jid, @participant_jid, @admin, @updated_at)`,
+    );
+    const tx = this.db.transaction(() => {
+      del.run(groupJid);
+      for (const p of participants) {
+        ins.run(p);
+      }
+    });
+    tx();
+  }
+
+  listGroupParticipants(jid: string): StoredGroupParticipant[] {
+    const stmt = this.db.prepare(
+      `SELECT group_jid, participant_jid, admin, updated_at
+       FROM group_participants
+       WHERE group_jid = ?
+       ORDER BY participant_jid ASC`,
+    );
+    return stmt.all(jid);
   }
 
   getMediaByMessageId(messageId: string): StoredMedia | null {
