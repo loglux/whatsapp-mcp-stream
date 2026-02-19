@@ -42,7 +42,44 @@ export function registerAuthTools(
     },
   );
 
+  server.tool(
+    "force_resync",
+    "Force a full WhatsApp resync (clears app state and reconnects).",
+    {},
+    async (): Promise<CallToolResult> => {
+      return await forceResync(whatsappService);
+    },
+  );
+
   log.info("Authentication tools registered.");
+}
+
+async function forceResync(
+  whatsappService: WhatsAppService,
+): Promise<CallToolResult> {
+  try {
+    await whatsappService.forceResync();
+    return {
+      content: [
+        {
+          type: "text",
+          text: "Resync started. WhatsApp will reconnect and replay history.",
+        },
+      ],
+      isError: false,
+    };
+  } catch (error) {
+    log.error("Error forcing resync:", error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error forcing resync: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      isError: true,
+    };
+  }
 }
 
 /**

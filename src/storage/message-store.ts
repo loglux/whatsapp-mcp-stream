@@ -135,6 +135,20 @@ export class MessageStore {
         PRIMARY KEY (group_jid, participant_jid)
       );
 
+      CREATE TABLE IF NOT EXISTS message_reactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id TEXT,
+        data_json TEXT,
+        created_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS message_receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id TEXT,
+        data_json TEXT,
+        created_at INTEGER
+      );
+
       CREATE INDEX IF NOT EXISTS idx_media_chat ON media(chat_jid);
 
       CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_jid, timestamp DESC);
@@ -142,6 +156,8 @@ export class MessageStore {
       CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
       CREATE INDEX IF NOT EXISTS idx_contacts_number ON contacts(number);
       CREATE INDEX IF NOT EXISTS idx_group_participants_group ON group_participants(group_jid);
+      CREATE INDEX IF NOT EXISTS idx_message_reactions_msg ON message_reactions(message_id);
+      CREATE INDEX IF NOT EXISTS idx_message_receipts_msg ON message_receipts(message_id);
     `;
     this.db.exec(sql);
   }
@@ -170,6 +186,19 @@ export class MessageStore {
        VALUES (@id, @chat_jid, @from, @to, @timestamp, @from_me, @body, @has_media, @type)`,
     );
     stmt.run(msg);
+  }
+
+  updateMessageContent(
+    id: string,
+    body: string,
+    hasMedia: number,
+    type: string,
+  ): number {
+    const stmt = this.db.prepare(
+      `UPDATE messages SET body = ?, has_media = ?, type = ? WHERE id = ?`,
+    );
+    const info = stmt.run(body, hasMedia, type, id);
+    return info.changes as number;
   }
 
   listChats(limit = 20): StoredChat[] {
@@ -208,6 +237,32 @@ export class MessageStore {
        ORDER BY timestamp ASC`,
     );
     return stmt.all(jid);
+  }
+
+  deleteMessageById(id: string): void {
+    const stmt = this.db.prepare(`DELETE FROM messages WHERE id = ?`);
+    stmt.run(id);
+  }
+
+  deleteMessagesByChat(jid: string): void {
+    const stmt = this.db.prepare(`DELETE FROM messages WHERE chat_jid = ?`);
+    stmt.run(jid);
+  }
+
+  insertMessageReaction(messageId: string, dataJson: string): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO message_reactions (message_id, data_json, created_at)
+       VALUES (?, ?, ?)`,
+    );
+    stmt.run(messageId, dataJson, Date.now());
+  }
+
+  insertMessageReceipt(messageId: string, dataJson: string): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO message_receipts (message_id, data_json, created_at)
+       VALUES (?, ?, ?)`,
+    );
+    stmt.run(messageId, dataJson, Date.now());
   }
 
   searchMessages(query: string, limit = 20): StoredMessage[] {

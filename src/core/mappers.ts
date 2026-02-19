@@ -29,7 +29,14 @@ export function mapMessage(
   const id = serializeMessageId(msg);
   const jid = msg?.key?.remoteJid || "";
   const fromMe = Boolean(msg?.key?.fromMe);
-  const timestamp = Number(msg?.messageTimestamp || 0) * 1000;
+  const rawTs = msg?.messageTimestamp;
+  const tsValue =
+    typeof rawTs === "number"
+      ? rawTs
+      : typeof rawTs?.toNumber === "function"
+        ? rawTs.toNumber()
+        : Number(rawTs || 0);
+  const timestamp = tsValue * 1000;
   const message = msg?.message || {};
   const body = extractText(message);
   const hasMedia = Boolean(
@@ -43,7 +50,9 @@ export function mapMessage(
   return {
     id,
     body,
-    from: fromMe ? "me" : msg?.key?.participant || jid,
+    from: fromMe
+      ? "me"
+      : msg?.key?.participant || msg?.key?.participantAlt || jid,
     to: jid,
     timestamp,
     fromMe,
@@ -66,17 +75,37 @@ export function mapStoredMessage(msg: StoredMessage): SimpleMessage {
 }
 
 export function mapContact(contact: any): SimpleContact {
-  const id = contact?.id || "";
-  const number = String(id).split("@")[0] || "";
+  const id = contact?.id || contact?.jid || "";
+  const isGroup = String(id).endsWith("@g.us");
+  const rawPhone =
+    contact?.phoneNumber?.user ||
+    contact?.phoneNumber?.number ||
+    contact?.phoneNumber?.phoneNumber ||
+    contact?.phoneNumber?.full ||
+    contact?.phoneNumber ||
+    null;
+  const number =
+    (typeof rawPhone === "string" ? rawPhone.replace(/[^\d]/g, "") : "") ||
+    (String(id).endsWith("@s.whatsapp.net") ? String(id).split("@")[0] : "");
+  const isMyContact =
+    typeof contact?.isMyContact === "boolean"
+      ? contact.isMyContact
+      : typeof contact?.isContact === "boolean"
+        ? contact.isContact
+        : typeof contact?.isWAContact === "boolean"
+          ? contact.isWAContact
+          : false;
+  const isMe =
+    typeof contact?.isMe === "boolean" ? contact.isMe : false;
   return {
     id,
-    name: contact?.name || contact?.notify || null,
-    pushname: contact?.notify || null,
-    isMe: false,
-    isUser: true,
-    isGroup: String(id).endsWith("@g.us"),
-    isWAContact: true,
-    isMyContact: true,
+    name: contact?.name || contact?.verifiedName || contact?.notify || null,
+    pushname: contact?.notify || contact?.pushname || null,
+    isMe,
+    isUser: !isGroup,
+    isGroup,
+    isWAContact: !isGroup,
+    isMyContact,
     number,
   };
 }

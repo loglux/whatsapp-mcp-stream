@@ -150,6 +150,7 @@ export function registerAdminRoutes(
       const hasQr = Boolean(whatsapp.getLatestQrCode());
       const syncStats = whatsapp.getSyncStats();
       const dbStats = whatsapp.getMessageStoreStats();
+      const connectionInfo = whatsapp.getConnectionInfo();
       res.json({
         authenticated: isAuthenticated,
         ready: isReady,
@@ -165,6 +166,9 @@ export function registerAdminRoutes(
         dbMessages: dbStats?.messages ?? 0,
         dbMedia: dbStats?.media ?? 0,
         dbContacts: dbStats?.contacts ?? 0,
+        sessionReplaced: connectionInfo.sessionReplaced,
+        lastDisconnectReason: connectionInfo.lastDisconnectReason,
+        lastDisconnectAt: connectionInfo.lastDisconnectAt,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {

@@ -42,6 +42,17 @@ export class StoreService {
     this.messageStore?.upsertMessage(message);
   }
 
+  updateMessageContent(
+    id: string,
+    body: string,
+    hasMedia: number,
+    type: string,
+  ): number {
+    return this.messageStore
+      ? this.messageStore.updateMessageContent(id, body, hasMedia, type)
+      : 0;
+  }
+
   upsertMedia(media: StoredMedia): void {
     this.messageStore?.upsertMedia(media);
   }
@@ -64,6 +75,22 @@ export class StoreService {
 
   listMessagesAll(jid: string): StoredMessage[] {
     return this.messageStore ? this.messageStore.listMessagesAll(jid) : [];
+  }
+
+  deleteMessageById(id: string): void {
+    this.messageStore?.deleteMessageById(id);
+  }
+
+  deleteMessagesByChat(jid: string): void {
+    this.messageStore?.deleteMessagesByChat(jid);
+  }
+
+  insertMessageReaction(messageId: string, dataJson: string): void {
+    this.messageStore?.insertMessageReaction(messageId, dataJson);
+  }
+
+  insertMessageReceipt(messageId: string, dataJson: string): void {
+    this.messageStore?.insertMessageReceipt(messageId, dataJson);
   }
 
   searchMessages(query: string, limit = 20): StoredMessage[] {

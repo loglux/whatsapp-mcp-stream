@@ -16,11 +16,7 @@ export class WhatsAppSync {
     private readonly trackMessage: (msg: any) => void,
     private readonly upsertStoredChat: (chat: any) => void,
     private readonly upsertStoredMessage: (msg: any) => void,
-    private readonly loadMessagesFromStore: (
-      jid: string,
-      limit: number,
-    ) => Promise<any[]>,
-    private readonly getChatsFromStore: () => any[],
+    private readonly getChatCount: () => number,
   ) {}
 
   getStats() {
@@ -60,7 +56,7 @@ export class WhatsAppSync {
     this.warmupAttempts = 0;
     this.warmupTimer = setInterval(() => {
       this.warmupAttempts += 1;
-      const chatCount = this.getChatsFromStore().length;
+      const chatCount = this.getChatCount();
       log.info({ attempt: this.warmupAttempts, chatCount }, "Warmup tick");
       if (chatCount > 0 || this.warmupAttempts > 5) {
         this.clearWarmupTimer();
@@ -77,7 +73,7 @@ export class WhatsAppSync {
     onForceResync?: () => Promise<void>,
   ): Promise<{ chatCount: number; messageCount: number }> {
     await this.warmup(onForceResync);
-    const chatCount = this.getChatsFromStore().length;
+    const chatCount = this.getChatCount();
     const messageCount = getMessageCount ? getMessageCount() : 0;
     return { chatCount, messageCount };
   }
@@ -99,9 +95,9 @@ export class WhatsAppSync {
     if (!sock) return;
     try {
       log.info("Warmup started");
-      const initialChats = this.getChatsFromStore();
+      const initialChatsCount = this.getChatCount();
       if (
-        (!initialChats || initialChats.length === 0) &&
+        initialChatsCount === 0 &&
         typeof sock.resyncAppState === "function"
       ) {
         try {
@@ -112,20 +108,7 @@ export class WhatsAppSync {
         }
       }
 
-      const chats = this.getChatsFromStore();
-      if (chats?.length) {
-        const targets = chats
-          .map((c: any) => c?.id || c?.jid)
-          .filter((jid: string) => Boolean(jid))
-          .slice(0, 10);
-        for (const jid of targets) {
-          const msgs = await this.loadMessagesFromStore(jid, 20);
-          if (msgs?.length) {
-            msgs.forEach((msg: any) => this.trackMessage(msg));
-          }
-        }
-      }
-      const chatCount = chats?.length || 0;
+      const chatCount = this.getChatCount();
       log.info({ chatCount }, "Warmup completed");
       if (chatCount === 0 && !this.forcedResync && this.warmupAttempts >= 2) {
         log.warn("Warmup still empty, forcing resync");
@@ -139,18 +122,11 @@ export class WhatsAppSync {
     }
   }
 
-  handleChatsSet(payload: any, store: any) {
+  handleChatsSet(payload: any) {
     if (payload?.chats && Array.isArray(payload.chats)) {
       const validChats = payload.chats
         .map((chat: any) => this.normalizeChatRecord(chat))
         .filter((chat: any) => chat?.id);
-      if (validChats.length && store?.chats?.insert) {
-        try {
-          store.chats.insert(validChats);
-        } catch (error) {
-          log.warn({ err: error }, "Failed to insert chats into store");
-        }
-      }
       for (const chat of validChats) {
         this.upsertStoredChat(chat);
       }
@@ -190,31 +166,41 @@ export class WhatsAppSync {
     }
   }
 
-  handleMessagingHistorySet(payload: any, store: any) {
-    const { chats, contacts, messages } = payload || {};
+  handleMessagingHistorySet(payload: any) {
+    const { chats, contacts, messages, isLatest, progress, syncType } =
+      payload || {};
     if (chats && Array.isArray(chats)) {
       const validChats = chats
         .map((chat: any) => this.normalizeChatRecord(chat))
         .filter((chat: any) => chat?.id);
-      if (validChats.length && store?.chats?.insert) {
-        try {
-          store.chats.insert(validChats);
-        } catch (error) {
-          log.warn({ err: error }, "Failed to insert history chats into store");
-        }
-      }
       for (const chat of validChats) {
         this.upsertStoredChat(chat);
       }
     }
-    if (contacts && store?.contacts) {
-      for (const contact of contacts) {
-        if (contact?.id) {
-          store.contacts[contact.id] = contact;
+    if (messages && Array.isArray(messages)) {
+      if ((!chats || chats.length === 0) && messages.length > 0) {
+        const derived: Record<string, any> = {};
+        for (const msg of messages) {
+          const jid = msg?.key?.remoteJid;
+          if (!jid) continue;
+          if (!derived[jid]) {
+            const rawTs = msg?.messageTimestamp;
+            const tsValue =
+              typeof rawTs === "number"
+                ? rawTs
+                : typeof rawTs?.toNumber === "function"
+                  ? rawTs.toNumber()
+                  : Number(rawTs || 0);
+            derived[jid] = {
+              id: jid,
+              conversationTimestamp: tsValue,
+            };
+          }
+        }
+        for (const chat of Object.values(derived)) {
+          this.upsertStoredChat(chat);
         }
       }
-    }
-    if (messages && Array.isArray(messages)) {
       for (const msg of messages) {
         this.trackMessage(msg);
         this.upsertStoredMessage(msg);
@@ -226,6 +212,9 @@ export class WhatsAppSync {
         chats: Array.isArray(chats) ? chats.length : 0,
         contacts: Array.isArray(contacts) ? contacts.length : 0,
         messages: Array.isArray(messages) ? messages.length : 0,
+        isLatest: typeof isLatest === "boolean" ? isLatest : undefined,
+        progress: typeof progress === "number" ? progress : undefined,
+        syncType: syncType ?? undefined,
       },
       "Messaging history synced",
     );

@@ -1,7 +1,7 @@
 # WhatsApp MCP Stream Dockerfile
-# Node.js 18 with FFmpeg
+# Node.js 20 with FFmpeg
 
-FROM node:18-bullseye-slim AS builder
+FROM node:20-bullseye-slim AS builder
 
 # Install system dependencies for building
 RUN apt-get update && apt-get install -y \
@@ -26,7 +26,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM node:18-bullseye-slim
+FROM node:20-bullseye-slim
 
 # Install runtime dependencies: FFmpeg and certificates
 RUN apt-get update && apt-get install -y \
