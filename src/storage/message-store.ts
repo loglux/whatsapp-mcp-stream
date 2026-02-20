@@ -63,6 +63,13 @@ export interface StoredGroupParticipant {
   updated_at: number;
 }
 
+export interface StoredLidMapping {
+  lid_jid: string;
+  pn_jid: string | null;
+  pn_number: string | null;
+  updated_at: number;
+}
+
 export class MessageStore {
   private db: any;
 
@@ -135,6 +142,13 @@ export class MessageStore {
         PRIMARY KEY (group_jid, participant_jid)
       );
 
+      CREATE TABLE IF NOT EXISTS lid_mappings (
+        lid_jid TEXT PRIMARY KEY,
+        pn_jid TEXT,
+        pn_number TEXT,
+        updated_at INTEGER
+      );
+
       CREATE TABLE IF NOT EXISTS message_reactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         message_id TEXT,
@@ -158,6 +172,8 @@ export class MessageStore {
       CREATE INDEX IF NOT EXISTS idx_group_participants_group ON group_participants(group_jid);
       CREATE INDEX IF NOT EXISTS idx_message_reactions_msg ON message_reactions(message_id);
       CREATE INDEX IF NOT EXISTS idx_message_receipts_msg ON message_receipts(message_id);
+      CREATE INDEX IF NOT EXISTS idx_lid_mappings_pn_jid ON lid_mappings(pn_jid);
+      CREATE INDEX IF NOT EXISTS idx_lid_mappings_pn_number ON lid_mappings(pn_number);
     `;
     this.db.exec(sql);
   }
@@ -297,6 +313,39 @@ export class MessageStore {
          updated_at=excluded.updated_at`,
     );
     stmt.run(contact);
+  }
+
+  upsertLidMapping(mapping: StoredLidMapping): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO lid_mappings (lid_jid, pn_jid, pn_number, updated_at)
+       VALUES (@lid_jid, @pn_jid, @pn_number, @updated_at)
+       ON CONFLICT(lid_jid) DO UPDATE SET
+         pn_jid=excluded.pn_jid,
+         pn_number=excluded.pn_number,
+         updated_at=excluded.updated_at`,
+    );
+    stmt.run(mapping);
+  }
+
+  getLidForPn(pnJidOrNumber: string): string | null {
+    const input = pnJidOrNumber || "";
+    const isJid = input.includes("@");
+    const stmt = this.db.prepare(
+      `SELECT lid_jid FROM lid_mappings WHERE ${isJid ? "pn_jid" : "pn_number"} = ?`,
+    );
+    const row = stmt.get(input);
+    return row?.lid_jid || null;
+  }
+
+  getPnForLid(
+    lidJid: string,
+  ): { pnJid: string | null; pnNumber: string | null } | null {
+    const stmt = this.db.prepare(
+      `SELECT pn_jid, pn_number FROM lid_mappings WHERE lid_jid = ?`,
+    );
+    const row = stmt.get(lidJid);
+    if (!row) return null;
+    return { pnJid: row.pn_jid || null, pnNumber: row.pn_number || null };
   }
 
   getContactById(jid: string): StoredContact | null {

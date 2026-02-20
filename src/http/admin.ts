@@ -316,8 +316,15 @@ export function registerAdminRoutes(
 
   app.post("/api/force-resync", async (_req: Request, res: Response) => {
     try {
-      await whatsapp.forceResync();
-      res.json({ success: true });
+      res.status(202).json({ success: true, status: "started" });
+      setImmediate(async () => {
+        try {
+          await whatsapp.forceResync();
+          log.info("Force resync completed");
+        } catch (error) {
+          log.error({ err: error }, "Error forcing resync (async)");
+        }
+      });
     } catch (error) {
       log.error("Error forcing resync:", error);
       res.status(500).json({ error: "Failed to force resync" });

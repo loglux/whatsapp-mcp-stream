@@ -54,6 +54,13 @@ export class WhatsAppService {
   private storeService: StoreService | null = null;
   private client: BaileysClient;
   private sync: WhatsAppSync;
+  private readonly eventLogEnabled =
+    (process.env.WA_EVENT_LOG || "").toLowerCase() === "1";
+  private readonly eventStreamEnabled =
+    (process.env.WA_EVENT_STREAM || "").toLowerCase() === "1";
+  private readonly eventStreamPath =
+    process.env.WA_EVENT_STREAM_PATH || "/app/wa-events.log";
+  private eventStreamWriter: fs.WriteStream | null = null;
 
   constructor() {
     const baseDir =
@@ -86,6 +93,75 @@ export class WhatsAppService {
       return jidNormalizedUser(jid);
     }
     return jid;
+  }
+
+  private isLidJid(jid: string): boolean {
+    return Boolean(jid && String(jid).endsWith("@lid"));
+  }
+
+  private isPnJid(jid: string): boolean {
+    return Boolean(jid && String(jid).endsWith("@s.whatsapp.net"));
+  }
+
+  private normalizePnNumber(value: string | null | undefined): string | null {
+    if (!value) return null;
+    const cleaned = String(value).replace(/[^\d]/g, "");
+    return cleaned || null;
+  }
+
+  private storeLidMapping(lidJid: string, pnJid: string | null): void {
+    if (!this.storeService || !lidJid) return;
+    const pnNumber = pnJid ? this.normalizePnNumber(pnJid) : null;
+    this.storeService.upsertLidMapping(lidJid, pnJid, pnNumber);
+  }
+
+  private storeLidMappingFromPair(a?: string, b?: string): void {
+    const first = a || "";
+    const second = b || "";
+    if (!first || !second) return;
+    if (this.isLidJid(first) && this.isPnJid(second)) {
+      this.storeLidMapping(first, second);
+    } else if (this.isPnJid(first) && this.isLidJid(second)) {
+      this.storeLidMapping(second, first);
+    }
+  }
+
+  private storeLidMappingFromKey(key: any): void {
+    if (!key) return;
+    this.storeLidMappingFromPair(key.remoteJid, key.remoteJidAlt);
+    this.storeLidMappingFromPair(key.participant, key.participantAlt);
+  }
+
+  private storeLidMappingFromContact(contact: any): void {
+    if (!contact) return;
+    const id = contact?.id || contact?.jid || null;
+    const lid =
+      contact?.lid ||
+      (id && this.isLidJid(id) ? id : null) ||
+      (contact?.lid?.user ? contact.lid.user : null);
+    const pn =
+      contact?.phoneNumber?.user ||
+      contact?.phoneNumber?.number ||
+      contact?.phoneNumber ||
+      (id && this.isPnJid(id) ? id : null);
+    if (lid && pn) {
+      this.storeLidMapping(lid, this.isPnJid(pn) ? pn : `${pn}@s.whatsapp.net`);
+    }
+  }
+
+  private resolveLookupJid(jid: string): string {
+    const normalized = this.normalizeJid(jid);
+    if (!this.storeService || !normalized) return normalized;
+    const direct = this.storeService.getChatById(normalized);
+    if (direct) return normalized;
+    const lidFromPn = this.storeService.getLidForPn(normalized);
+    if (lidFromPn) return lidFromPn;
+    const pnNumber = this.normalizePnNumber(normalized);
+    if (pnNumber) {
+      const lid = this.storeService.getLidForPn(pnNumber);
+      if (lid) return lid;
+    }
+    return normalized;
   }
 
   private serializeMessageId(msg: any): string {
@@ -176,7 +252,19 @@ export class WhatsAppService {
     is_my_contact: boolean | null;
   } | null {
     if (!this.storeService || !jid) return null;
-    const contact = this.storeService.getContactById(jid);
+    let contact = this.storeService.getContactById(jid);
+    if (!contact && this.isLidJid(jid)) {
+      const mapped = this.storeService.getPnForLid(jid);
+      if (mapped?.pnJid) {
+        contact = this.storeService.getContactById(mapped.pnJid);
+      }
+    }
+    if (!contact && this.isPnJid(jid)) {
+      const lid = this.storeService.getLidForPn(jid);
+      if (lid) {
+        contact = this.storeService.getContactById(lid);
+      }
+    }
     if (!contact) return null;
     return {
       name: contact.name || null,
@@ -257,6 +345,7 @@ export class WhatsAppService {
     }
     const jid = msg?.key?.remoteJid;
     if (!jid) return;
+    this.storeLidMappingFromKey(msg?.key);
     const list = this.messagesByChat.get(jid) || [];
     list.push(msg);
     if (list.length > 500) {
@@ -305,6 +394,50 @@ export class WhatsAppService {
         });
 
         const sock = this.client.getSocket();
+        log.info(
+          {
+            eventLogEnabled: this.eventLogEnabled,
+            eventStreamEnabled: this.eventStreamEnabled,
+            eventStreamPath: this.eventStreamPath,
+          },
+          "WhatsApp event debug config",
+        );
+
+        if (this.eventLogEnabled || this.eventStreamEnabled) {
+          if (this.eventStreamEnabled) {
+            try {
+              fs.writeFileSync(this.eventStreamPath, "", { flag: "a" });
+            } catch (err) {
+              log.warn({ err }, "Failed to touch WhatsApp event stream file");
+            }
+          }
+          const originalEmit = sock.ev.emit.bind(sock.ev);
+          sock.ev.emit = ((event: string, ...args: any[]) => {
+            if (this.eventStreamEnabled) {
+              this.writeEventStream(event, args);
+            }
+            if (this.eventLogEnabled) {
+              const summary = this.summarizeEventPayload(event, args);
+              log.info({ event, ...summary }, "WhatsApp event (raw)");
+            }
+            return originalEmit(event, ...args);
+          }) as typeof sock.ev.emit;
+        }
+
+        if (this.eventStreamEnabled) {
+          try {
+            this.eventStreamWriter = fs.createWriteStream(
+              this.eventStreamPath,
+              { flags: "a" },
+            );
+            log.info(
+              { path: this.eventStreamPath },
+              "WhatsApp event stream capture enabled",
+            );
+          } catch (err) {
+            log.warn({ err }, "Failed to enable WhatsApp event stream capture");
+          }
+        }
 
         sock.ev.on("connection.update", (update: any) => {
           const { connection, lastDisconnect, qr } = update;
@@ -312,6 +445,14 @@ export class WhatsAppService {
           if (connection) {
             log.info({ connection }, "WhatsApp connection update");
           }
+          this.logEvent("connection.update", {
+            connection,
+            hasQr: Boolean(qr),
+            isOnline: update?.isOnline,
+            receivedPendingNotifications: update?.receivedPendingNotifications,
+            statusCode: lastDisconnect?.error?.output?.statusCode,
+            reason: lastDisconnect?.error?.message,
+          });
 
           if (qr) {
             this.latestQrCode = qr;
@@ -382,6 +523,16 @@ export class WhatsAppService {
         });
 
         sock.ev.on("messages.upsert", (ev: any) => {
+          this.logEvent("messages.upsert", {
+            type: ev?.type,
+            count: Array.isArray(ev?.messages) ? ev.messages.length : 0,
+            jids: Array.isArray(ev?.messages)
+              ? ev.messages.map((m: any) => m?.key?.remoteJid).filter(Boolean)
+              : [],
+            ids: Array.isArray(ev?.messages)
+              ? ev.messages.map((m: any) => m?.key?.id).filter(Boolean)
+              : [],
+          });
           if (!ev?.messages) return;
           for (const msg of ev.messages) {
             this.trackMessage(msg);
@@ -397,6 +548,9 @@ export class WhatsAppService {
         });
 
         sock.ev.on("messages.update", (updates: any[]) => {
+          this.logEvent("messages.update", {
+            count: Array.isArray(updates) ? updates.length : 0,
+          });
           if (!updates) return;
           for (const update of updates) {
             const key =
@@ -432,6 +586,9 @@ export class WhatsAppService {
         });
 
         sock.ev.on("messages.media-update", (updates: any[]) => {
+          this.logEvent("messages.media-update", {
+            count: Array.isArray(updates) ? updates.length : 0,
+          });
           if (!updates) return;
           for (const update of updates) {
             const key = update?.key;
@@ -451,6 +608,9 @@ export class WhatsAppService {
         });
 
         sock.ev.on("messages.reaction", (updates: any[]) => {
+          this.logEvent("messages.reaction", {
+            count: Array.isArray(updates) ? updates.length : 0,
+          });
           if (!updates) return;
           for (const update of updates) {
             const key = update?.key;
@@ -480,6 +640,9 @@ export class WhatsAppService {
         });
 
         sock.ev.on("message-receipt.update", (updates: any[]) => {
+          this.logEvent("message-receipt.update", {
+            count: Array.isArray(updates) ? updates.length : 0,
+          });
           if (!updates) return;
           for (const update of updates) {
             const key = update?.key;
@@ -509,6 +672,11 @@ export class WhatsAppService {
         });
 
         sock.ev.on("messages.delete", (payload: any) => {
+          this.logEvent("messages.delete", {
+            all: Boolean(payload?.all),
+            jid: payload?.jid,
+            count: Array.isArray(payload?.keys) ? payload.keys.length : 0,
+          });
           if (!payload) return;
           if (payload.all && payload.jid) {
             if (this.storeService) {
@@ -537,45 +705,98 @@ export class WhatsAppService {
         });
 
         sock.ev.on("chats.set", (payload: any) => {
+          this.logEvent("chats.set", {
+            count: Array.isArray(payload?.chats) ? payload.chats.length : 0,
+          });
           this.sync.handleChatsSet(payload);
         });
 
         sock.ev.on("messages.set", (payload: any) => {
+          this.logEvent("messages.set", {
+            count: Array.isArray(payload?.messages)
+              ? payload.messages.length
+              : 0,
+          });
           this.sync.handleMessagesSet(payload);
         });
 
         sock.ev.on("chats.upsert", (payload: any) => {
+          this.logEvent("chats.upsert", {
+            count: Array.isArray(payload) ? payload.length : 0,
+          });
           this.sync.handleChatsUpsert(payload);
         });
 
         sock.ev.on("chats.update", (payload: any) => {
+          this.logEvent("chats.update", {
+            count: Array.isArray(payload) ? payload.length : 0,
+          });
           this.sync.handleChatsUpdate(payload);
         });
 
         sock.ev.on("contacts.upsert", (payload: any) => {
+          this.logEvent("contacts.upsert", {
+            count: Array.isArray(payload) ? payload.length : 0,
+          });
           if (payload && Array.isArray(payload)) {
             log.info({ count: payload.length }, "Contacts upsert");
             for (const contact of payload) {
               this.upsertStoredContact(contact);
+              this.storeLidMappingFromContact(contact);
             }
           }
         });
 
         sock.ev.on("contacts.update", (payload: any) => {
+          this.logEvent("contacts.update", {
+            count: Array.isArray(payload) ? payload.length : 0,
+          });
           if (payload && Array.isArray(payload)) {
             log.info({ count: payload.length }, "Contacts update");
             for (const contact of payload) {
               this.upsertStoredContact(contact);
+              this.storeLidMappingFromContact(contact);
+            }
+          }
+        });
+
+        sock.ev.on("lid-mapping.update", (payload: any) => {
+          this.logEvent("lid-mapping.update", {
+            type: Array.isArray(payload) ? "array" : typeof payload,
+          });
+          const mappings = Array.isArray(payload) ? payload : [payload];
+          for (const item of mappings) {
+            if (!item) continue;
+            const lid = item?.lid || item?.lidJid || item?.jid || null;
+            const pn = item?.pn || item?.pnJid || item?.phoneNumber || null;
+            if (lid && pn) {
+              this.storeLidMapping(
+                String(lid),
+                this.isPnJid(String(pn)) ? String(pn) : `${pn}@s.whatsapp.net`,
+              );
             }
           }
         });
 
         sock.ev.on("messaging-history.set", (payload: any) => {
+          this.logEvent("messaging-history.set", {
+            chats: Array.isArray(payload?.chats) ? payload.chats.length : 0,
+            contacts: Array.isArray(payload?.contacts)
+              ? payload.contacts.length
+              : 0,
+            messages: Array.isArray(payload?.messages)
+              ? payload.messages.length
+              : 0,
+            isLatest: payload?.isLatest,
+            progress: payload?.progress,
+            syncType: payload?.syncType,
+          });
           this.sync.handleMessagingHistorySet(payload);
           const contacts = payload?.contacts;
           if (contacts && Array.isArray(contacts)) {
             for (const contact of contacts) {
               this.upsertStoredContact(contact);
+              this.storeLidMappingFromContact(contact);
             }
           }
         });
@@ -702,10 +923,76 @@ export class WhatsAppService {
 
   private async destroyInternal(): Promise<void> {
     await this.client.destroy();
+    if (this.eventStreamWriter) {
+      try {
+        this.eventStreamWriter.end();
+      } catch (_error) {
+        // ignore
+      }
+      this.eventStreamWriter = null;
+    }
     this.sync.clearWarmupTimer();
     this.isAuthenticatedFlag = false;
     this.isReadyFlag = false;
     this.latestQrCode = null;
+  }
+
+  private logEvent(event: string, payload: Record<string, unknown>): void {
+    if (!this.eventLogEnabled) return;
+    log.info({ event, ...payload }, "WhatsApp event");
+  }
+
+  private summarizeEventPayload(
+    event: string,
+    args: any[],
+  ): Record<string, unknown> {
+    const payload = args.length === 1 ? args[0] : args;
+    if (Array.isArray(payload)) {
+      const itemTypes = Array.from(
+        new Set(
+          payload.map((item) => (Array.isArray(item) ? "array" : typeof item)),
+        ),
+      ).slice(0, 5);
+      return {
+        payloadType: "array",
+        arrayLength: payload.length,
+        itemTypes,
+      };
+    }
+    if (payload && typeof payload === "object") {
+      return {
+        payloadType: "object",
+        keys: Object.keys(payload).slice(0, 25),
+      };
+    }
+    return {
+      payloadType: typeof payload,
+      hasPayload: Boolean(payload),
+      event,
+    };
+  }
+
+  private writeEventStream(event: string, args: any[]): void {
+    if (!this.eventStreamEnabled || !this.eventStreamWriter) return;
+    const payload = args.length === 1 ? args[0] : args;
+    try {
+      const line = JSON.stringify(
+        { ts: Date.now(), event, payload },
+        (_key, value) => {
+          if (typeof value === "bigint") return value.toString();
+          if (value instanceof Buffer) {
+            return { __type: "Buffer", length: value.length };
+          }
+          if (value instanceof Uint8Array) {
+            return { __type: "Uint8Array", length: value.length };
+          }
+          return value;
+        },
+      );
+      this.eventStreamWriter.write(`${line}\n`);
+    } catch (err) {
+      log.warn({ err, event }, "Failed to write WhatsApp event stream");
+    }
   }
 
   getConnectionInfo(): {
@@ -814,7 +1101,7 @@ export class WhatsAppService {
   }
 
   async getChatById(jid: string): Promise<SimpleChat | null> {
-    const normalized = this.normalizeJid(jid);
+    const normalized = this.resolveLookupJid(jid);
     if (this.storeService) {
       const stored = this.storeService.getChatById(normalized);
       if (!stored) return null;
@@ -832,7 +1119,7 @@ export class WhatsAppService {
   }
 
   async getMessages(jid: string, limit = 50): Promise<SimpleMessage[]> {
-    const normalized = this.normalizeJid(jid);
+    const normalized = this.resolveLookupJid(jid);
     const fromMemory = (this.messagesByChat.get(normalized) || []).map((msg) =>
       mapMessage(msg, this.serializeMessageId.bind(this)),
     );
@@ -863,11 +1150,14 @@ export class WhatsAppService {
     if (!this.storeService) {
       return { chat: null, messages: [], media: [] };
     }
-    const chat = await this.getChatById(jid);
+    const normalized = this.resolveLookupJid(jid);
+    const chat = await this.getChatById(normalized);
     const messages = this.storeService
-      .listMessagesAll(jid)
+      .listMessagesAll(normalized)
       .map((msg) => mapStoredMessage(msg));
-    const media = includeMedia ? this.storeService.listMediaByChat(jid) : [];
+    const media = includeMedia
+      ? this.storeService.listMediaByChat(normalized)
+      : [];
     return { chat, messages, media };
   }
 
@@ -892,7 +1182,7 @@ export class WhatsAppService {
     };
 
     if (chatId) {
-      const normalized = this.normalizeJid(chatId);
+      const normalized = this.resolveLookupJid(chatId);
       const list = this.messagesByChat.get(normalized) || [];
       if (list.length > 0) {
         searchRawList(list);
@@ -929,7 +1219,7 @@ export class WhatsAppService {
   async getProfilePicUrl(jid: string): Promise<string | null> {
     const socket = this.getSocket();
     try {
-      const normalized = this.normalizeJid(jid);
+      const normalized = this.resolveLookupJid(jid);
       const url = await socket.profilePictureUrl(normalized, "image");
       return url || null;
     } catch (_error) {
@@ -939,13 +1229,17 @@ export class WhatsAppService {
 
   async getGroupInfo(groupJid: string): Promise<any> {
     const socket = this.getSocket();
-    const normalized = this.normalizeJid(groupJid);
+    const normalized = this.resolveLookupJid(groupJid);
     try {
       const metadata = await socket.groupMetadata(normalized);
       this.persistGroupMetadata(metadata);
       const participants = Array.isArray(metadata?.participants)
         ? metadata.participants.map((p: any) => {
             const jid = this.normalizeJid(p?.id || "");
+            if (p?.id && (p?.pn || p?.pnJid || p?.phoneNumber)) {
+              const pn = p?.pn || p?.pnJid || p?.phoneNumber;
+              this.storeLidMappingFromPair(String(p.id), String(pn));
+            }
             const contact = jid ? this.getContactSummary(jid) : null;
             return {
               ...p,
@@ -1262,7 +1556,19 @@ export class WhatsAppService {
 
   async getContactById(jid: string): Promise<SimpleContact | null> {
     if (this.storeService) {
-      const contact = this.storeService.getContactById(jid);
+      let contact = this.storeService.getContactById(jid);
+      if (!contact && this.isPnJid(jid)) {
+        const lid = this.storeService.getLidForPn(jid);
+        if (lid) {
+          contact = this.storeService.getContactById(lid);
+        }
+      }
+      if (!contact && this.isLidJid(jid)) {
+        const mapped = this.storeService.getPnForLid(jid);
+        if (mapped?.pnJid) {
+          contact = this.storeService.getContactById(mapped.pnJid);
+        }
+      }
       if (!contact) return null;
       return {
         id: contact.jid,
@@ -1282,7 +1588,8 @@ export class WhatsAppService {
 
   private getLastMessageForChat(jid: string): SimpleMessage | undefined {
     if (this.storeService) {
-      const stored = this.storeService.listMessages(jid, 1);
+      const resolved = this.resolveLookupJid(jid);
+      const stored = this.storeService.listMessages(resolved, 1);
       if (stored.length > 0) {
         return mapStoredMessage(stored[0]);
       }

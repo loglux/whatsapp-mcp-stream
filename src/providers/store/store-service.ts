@@ -61,6 +61,23 @@ export class StoreService {
     this.messageStore?.upsertContact(contact);
   }
 
+  upsertLidMapping(lidJid: string, pnJid: string | null, pnNumber: string | null): void {
+    this.messageStore?.upsertLidMapping({
+      lid_jid: lidJid,
+      pn_jid: pnJid,
+      pn_number: pnNumber,
+      updated_at: Date.now(),
+    });
+  }
+
+  getLidForPn(pnJidOrNumber: string): string | null {
+    return this.messageStore ? this.messageStore.getLidForPn(pnJidOrNumber) : null;
+  }
+
+  getPnForLid(lidJid: string): { pnJid: string | null; pnNumber: string | null } | null {
+    return this.messageStore ? this.messageStore.getPnForLid(lidJid) : null;
+  }
+
   listChats(limit = 20): StoredChat[] {
     return this.messageStore ? this.messageStore.listChats(limit) : [];
   }

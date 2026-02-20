@@ -10,6 +10,11 @@ services:
       - LOG_LEVEL=debug
       # Baileys logging level: silent, fatal, error, warn, info, debug, trace
       - BAILEYS_LOG_LEVEL=info
+      # Log incoming WhatsApp events (debugging)
+      - WA_EVENT_LOG=1
+      # Capture full Baileys event stream to file (debugging)
+      - WA_EVENT_STREAM=1
+      - WA_EVENT_STREAM_PATH=/app/logs/wa-events.log
 
       # Transport type: stdio, sse, or http (streamable HTTP)
       - TRANSPORT=http
