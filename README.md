@@ -84,6 +84,8 @@ Typical flow:
 2. Use the returned `mcp-session-id` header for subsequent requests
 3. `POST /mcp` for tool calls
 
+Note: clients must send `Accept: application/json, text/event-stream` on `initialize`.
+
 ## MCP Tools
 
 ### Auth
