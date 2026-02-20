@@ -31,6 +31,11 @@ The server will be available at:
 
 Settings can be edited in the admin UI and are persisted to `SETTINGS_PATH` (defaults to `MEDIA_DIR/settings.json`).
 
+## Admin UI
+
+![Admin UI](screenshots/wamcpstream.png)
+*Admin console with runtime settings, QR linking, export, and status.*
+
 Supported settings:
 
 - `media_public_base_url`
