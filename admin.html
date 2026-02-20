@@ -6,81 +6,140 @@
     <title>WhatsApp MCP Stream - Admin</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2325D366'/%3E%3Cpath d='M19 45l2-7a16 16 0 1110 6l-7 1z' fill='white' opacity='0.9'/%3E%3Ccircle cx='27' cy='27' r='3' fill='%2325D366'/%3E%3Ccircle cx='37' cy='27' r='3' fill='%2325D366'/%3E%3Cpath d='M25 37c3 3 11 3 14 0' stroke='%2325D366' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
     <style>
+        :root {
+            --bg: #0f1518;
+            --bg-soft: #161d21;
+            --panel: #0f1518;
+            --panel-border: rgba(255, 255, 255, 0.08);
+            --text: #f5f7f8;
+            --muted: #9fb0ba;
+            --accent: #25d366;
+            --accent-2: #5ee3ff;
+            --warning: #ff6b6b;
+            --shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+        }
+        * {
+            box-sizing: border-box;
+        }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background: #f5f5f5;
-            color: #333;
+            font-family: "Space Grotesk", "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+            margin: 0;
+            padding: 32px 18px 60px;
+            background: radial-gradient(1200px 900px at 20% -10%, #1c3c2f 0%, rgba(15, 21, 24, 0) 50%),
+                        radial-gradient(900px 600px at 90% 10%, #163144 0%, rgba(15, 21, 24, 0) 50%),
+                        var(--bg);
+            color: var(--text);
         }
         .container {
-            background: white;
-            border-radius: 10px;
-            padding: 30px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 980px;
+            margin: 0 auto;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.02) 100%);
+            border-radius: 18px;
+            padding: 28px;
+            border: 1px solid var(--panel-border);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(6px);
         }
         h1 {
-            color: #25D366;
-            margin-top: 0;
+            margin: 0;
+            font-weight: 600;
+            font-size: 28px;
+            letter-spacing: -0.02em;
+        }
+        .subtitle {
+            margin: 6px 0 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+        .header {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 22px;
+        }
+        .header-left {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
         }
         .status {
-            padding: 15px;
-            border-radius: 8px;
-            margin: 20px 0;
-            font-weight: bold;
+            padding: 10px 16px;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 13px;
+            border: 1px solid transparent;
+            background: rgba(255, 255, 255, 0.06);
         }
         .status.authenticated {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+            background: rgba(37, 211, 102, 0.15);
+            color: #b3f3c6;
+            border-color: rgba(37, 211, 102, 0.3);
         }
         .status.not-authenticated {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+            background: rgba(255, 107, 107, 0.15);
+            color: #ffd1d1;
+            border-color: rgba(255, 107, 107, 0.35);
         }
         .qr-container {
             text-align: center;
             margin: 30px 0;
+            padding: 18px;
+            border-radius: 14px;
+            border: 1px dashed rgba(255, 255, 255, 0.15);
+            background: rgba(0, 0, 0, 0.15);
+        }
+        .qr-container h3 {
+            margin: 0 0 8px;
+            font-size: 16px;
+        }
+        .qr-container p {
+            margin: 6px 0;
+            color: var(--muted);
+            font-size: 13px;
         }
         #qrImage {
             max-width: 300px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
             padding: 10px;
-            background: white;
+            background: #ffffff;
         }
         button {
-            background: #25D366;
+            background: linear-gradient(135deg, #25d366, #17b3a3);
             color: white;
             border: none;
-            padding: 12px 24px;
-            border-radius: 6px;
-            font-size: 16px;
+            padding: 11px 18px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
             cursor: pointer;
-            margin: 10px 5px;
-            transition: background 0.2s;
+            transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
+            box-shadow: 0 8px 16px rgba(37, 211, 102, 0.22);
         }
         button:hover {
-            background: #1da851;
+            transform: translateY(-1px);
         }
         button:disabled {
-            background: #cccccc;
+            background: #3b4a50;
+            color: #93a1a7;
+            box-shadow: none;
             cursor: not-allowed;
         }
         button.logout {
-            background: #dc3545;
+            background: linear-gradient(135deg, #ff6b6b, #d6455d);
+            box-shadow: 0 8px 16px rgba(255, 107, 107, 0.25);
         }
         button.logout:hover {
-            background: #c82333;
+            transform: translateY(-1px);
         }
         .loading {
             display: inline-block;
             width: 20px;
             height: 20px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #25D366;
+            border: 3px solid rgba(255, 255, 255, 0.2);
+            border-top: 3px solid var(--accent);
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin-right: 10px;
@@ -91,63 +150,74 @@
             100% { transform: rotate(360deg); }
         }
         .log {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 6px;
-            padding: 15px;
-            margin-top: 20px;
-            max-height: 200px;
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 18px;
+            max-height: 240px;
             overflow-y: auto;
-            font-family: monospace;
-            font-size: 14px;
+            font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+            font-size: 13px;
+            color: #d8e1e7;
         }
         .log-entry {
             padding: 5px 0;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         }
         .log-entry:last-child {
             border-bottom: none;
         }
         .timestamp {
-            color: #6c757d;
+            color: #7f94a0;
             margin-right: 10px;
         }
         .info {
-            color: #0d6efd;
+            color: #7ed6ff;
         }
         .success {
-            color: #198754;
+            color: #84f6b0;
         }
         .error {
-            color: #dc3545;
+            color: #ff8b8b;
         }
         .hidden {
             display: none;
         }
         .settings {
-            margin-top: 20px;
-            padding: 15px;
-            border: 1px solid #e9ecef;
-            border-radius: 6px;
-            background: #fafafa;
+            margin-top: 16px;
+            padding: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 14px;
+            background: rgba(0, 0, 0, 0.25);
         }
         .settings label {
             display: block;
             margin-bottom: 6px;
             font-weight: 600;
+            color: #cfe1ea;
         }
-        .settings input[type="text"] {
+        .settings input[type="text"],
+        .settings input[type="password"] {
             width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
+            padding: 10px 12px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
             font-size: 14px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text);
         }
         .settings .row {
             display: flex;
             gap: 10px;
             align-items: center;
             margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
         }
         .tabs {
             display: flex;
@@ -156,17 +226,18 @@
             flex-wrap: wrap;
         }
         .tab-btn {
-            background: #e9ecef;
-            color: #333;
-            border: 1px solid #d9dee3;
-            padding: 8px 14px;
-            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.06);
+            color: #d2dde3;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 8px 16px;
+            border-radius: 999px;
             font-size: 14px;
+            font-weight: 600;
         }
         .tab-btn.active {
-            background: #25D366;
-            color: white;
-            border-color: #25D366;
+            background: linear-gradient(135deg, #25d366, #17b3a3);
+            color: #fff;
+            border-color: transparent;
         }
         .tab-panel {
             display: none;
@@ -174,14 +245,51 @@
         .tab-panel.active {
             display: block;
         }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 14px;
+            border-radius: 14px;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .panel-title {
+            margin: 0 0 8px;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px 18px;
+        }
+        .settings .row.stretch {
+            justify-content: space-between;
+        }
+        @media (max-width: 720px) {
+            .controls {
+                flex-direction: column;
+            }
+            button {
+                width: 100%;
+            }
+            .settings-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>📱 WhatsApp MCP Stream Admin</h1>
-
-        <div id="statusContainer" class="status not-authenticated">
-            Checking authentication status...
+        <div class="header">
+            <div class="header-left">
+                <h1>WhatsApp MCP Stream</h1>
+                <div class="subtitle">Admin console for sessions, media, and exports</div>
+            </div>
+            <div id="statusContainer" class="status not-authenticated">
+                Checking authentication status...
+            </div>
         </div>
 
         <div id="qrContainer" class="qr-container hidden">
@@ -222,34 +330,52 @@
 
         <div id="settingsTab" class="tab-panel active">
             <div class="settings">
-                <h4>Settings</h4>
-                <label for="mediaBaseUrl">Media Public Base URL</label>
-                <input id="mediaBaseUrl" type="text" placeholder="http://192.168.10.32:3003">
-                <label for="uploadMaxMb" style="margin-top: 12px;">Upload Max (MB)</label>
-                <input id="uploadMaxMb" type="text" placeholder="50">
-                <div class="row">
-                    <label style="display:flex; align-items:center; gap:8px;">
-                        <input id="uploadEnabled" type="checkbox" checked>
-                        Upload enabled
-                    </label>
-                    <label style="display:flex; align-items:center; gap:8px;">
-                        <input id="requireUploadToken" type="checkbox">
-                        Require upload token
-                    </label>
+                <div class="panel-title">Settings</div>
+                <div class="settings-grid">
+                    <div class="field">
+                        <label for="mediaBaseUrl">Media Public Base URL</label>
+                        <input id="mediaBaseUrl" type="text" placeholder="http://192.168.10.32:3003">
+                    </div>
+                    <div class="field">
+                        <label for="uploadMaxMb">Upload Max (MB)</label>
+                        <input id="uploadMaxMb" type="text" placeholder="50">
+                    </div>
+                    <div class="field">
+                        <label>Upload Controls</label>
+                        <div class="row">
+                            <label style="display:flex; align-items:center; gap:8px;">
+                                <input id="uploadEnabled" type="checkbox" checked>
+                                Upload enabled
+                            </label>
+                            <label style="display:flex; align-items:center; gap:8px;">
+                                <input id="requireUploadToken" type="checkbox">
+                                Require upload token
+                            </label>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="maxFilesPerUpload">Max files per upload</label>
+                        <input id="maxFilesPerUpload" type="text" placeholder="1">
+                    </div>
+                    <div class="field">
+                        <label for="uploadToken">Upload Token</label>
+                        <input id="uploadToken" type="password" placeholder="set a token">
+                    </div>
+                    <div class="field">
+                        <label>Auto-download</label>
+                        <div class="row">
+                            <label style="display:flex; align-items:center; gap:8px;">
+                                <input id="autoDownloadMedia" type="checkbox">
+                                Auto-download media
+                            </label>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="autoDownloadMaxMb">Auto-download max size (MB)</label>
+                        <input id="autoDownloadMaxMb" type="text" placeholder="50">
+                    </div>
                 </div>
-                <label for="maxFilesPerUpload">Max files per upload</label>
-                <input id="maxFilesPerUpload" type="text" placeholder="1">
-                <label for="uploadToken">Upload Token</label>
-                <input id="uploadToken" type="password" placeholder="set a token">
-                <div class="row" style="margin-top: 12px;">
-                    <label style="display:flex; align-items:center; gap:8px;">
-                        <input id="autoDownloadMedia" type="checkbox">
-                        Auto-download media
-                    </label>
-                </div>
-                <label for="autoDownloadMaxMb">Auto-download max size (MB)</label>
-                <input id="autoDownloadMaxMb" type="text" placeholder="50">
-                <div class="row" style="margin-top: 14px; justify-content: space-between; align-items: center;">
+                <div class="row stretch" style="margin-top: 16px;">
                     <span id="settingsStatus"></span>
                     <button id="saveSettingsBtn" onclick="saveSettings()">Save Settings</button>
                 </div>
@@ -258,7 +384,7 @@
 
         <div id="exportTab" class="tab-panel">
             <div class="settings">
-                <h4>Export Chat</h4>
+                <div class="panel-title">Export Chat</div>
                 <label for="exportJid">Chat JID</label>
                 <input id="exportJid" type="text" placeholder="123456789@s.whatsapp.net or 123456789-12345@g.us">
                 <div class="row">
@@ -273,7 +399,7 @@
 
         <div id="statusTab" class="tab-panel">
             <div class="settings">
-                <h4>Status</h4>
+                <div class="panel-title">Status</div>
                 <div id="statusSnapshot">No status loaded yet.</div>
             </div>
         </div>
