@@ -36,9 +36,10 @@ export function registerChatTools(
           limit,
           include_last_message,
         );
+        const filtered = chats.filter((chat) => chat.id !== "status@broadcast");
         // Return the simplified chat structure
         return {
-          content: [{ type: "text", text: JSON.stringify(chats, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }],
         };
       } catch (error: any) {
         const message = error instanceof Error ? error.message : String(error);
