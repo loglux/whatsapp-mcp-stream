@@ -2,7 +2,11 @@ import { webcrypto } from "crypto";
 import fs from "fs";
 import pino from "pino";
 
-import makeWASocket, { fetchLatestBaileysVersion, useMultiFileAuthState } from "baileys";
+import makeWASocket, {
+  Browsers,
+  fetchLatestBaileysVersion,
+  useMultiFileAuthState,
+} from "baileys";
 
 export class BaileysClient {
   private sock: any | null = null;
@@ -29,7 +33,7 @@ export class BaileysClient {
       printQRInTerminal: false,
       logger,
       syncFullHistory: true,
-      browser: ["MCP", "Desktop", "1.0.0"],
+      browser: Browsers.macOS("Desktop"),
       getMessage: async (key: any) => (getMessage ? await getMessage(key) : undefined),
     });
 

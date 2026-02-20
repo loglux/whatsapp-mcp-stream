@@ -169,6 +169,16 @@ export class WhatsAppService {
     return normalized;
   }
 
+  private resolveCanonicalChatId(jid: string): string {
+    const normalized = this.normalizeJid(jid);
+    if (!this.storeService || !normalized) return normalized;
+    if (this.isLidJid(normalized)) {
+      const mapped = this.storeService.getPnForLid(normalized);
+      if (mapped?.pnJid) return mapped.pnJid;
+    }
+    return normalized;
+  }
+
   private serializeMessageId(msg: any): string {
     const jid = msg?.key?.remoteJid || msg?.key?.remoteJidAlt || "unknown";
     const id = msg?.key?.id || "unknown";
@@ -277,6 +287,12 @@ export class WhatsAppService {
       number: contact.number || null,
       is_my_contact: contact.is_my_contact ? true : false,
     };
+  }
+
+  private getBestContactName(jid: string): string | null {
+    const summary = this.getContactSummary(jid);
+    if (!summary) return null;
+    return summary.name || summary.pushname || summary.number || null;
   }
 
   private persistGroupMetadata(metadata: any): void {
@@ -1070,16 +1086,53 @@ export class WhatsAppService {
     if (this.storeService) {
       const stored = this.storeService.listChats(limit);
       if (stored.length > 0) {
-        const mapped = stored.map((chat) => ({
-          id: chat.id,
-          name: chat.name,
-          isGroup: Boolean(chat.is_group),
-          unreadCount: chat.unread_count || 0,
-          timestamp: chat.timestamp || 0,
-          lastMessage: includeLastMessage
+        const merged = new Map<string, SimpleChat>();
+        for (const chat of stored) {
+          if (chat.id === "status@broadcast") {
+            continue;
+          }
+          const canonicalId = this.resolveCanonicalChatId(chat.id);
+          const lastMessage = includeLastMessage
             ? this.getLastMessageForChat(chat.id)
-            : undefined,
-        }));
+            : undefined;
+          const fallbackName =
+            chat.name && chat.name !== chat.id
+              ? chat.name
+              : this.getBestContactName(chat.id) ||
+                this.getBestContactName(canonicalId) ||
+                chat.name;
+          const entry: SimpleChat = {
+            id: canonicalId,
+            name: fallbackName || chat.name,
+            isGroup: Boolean(chat.is_group),
+            unreadCount: chat.unread_count || 0,
+            timestamp: chat.timestamp || 0,
+            lastMessage,
+          };
+          const existing = merged.get(canonicalId);
+          if (!existing) {
+            merged.set(canonicalId, entry);
+            continue;
+          }
+          const existingTs = existing.timestamp || 0;
+          const entryTs = entry.timestamp || 0;
+          const bestMessage =
+            (existing.lastMessage?.timestamp || 0) >=
+            (entry.lastMessage?.timestamp || 0)
+              ? existing.lastMessage
+              : entry.lastMessage;
+          merged.set(canonicalId, {
+            ...existing,
+            name:
+              existing.name && existing.name !== existing.id
+                ? existing.name
+                : entry.name,
+            unreadCount: Math.max(existing.unreadCount, entry.unreadCount),
+            timestamp: Math.max(existingTs, entryTs),
+            lastMessage: bestMessage,
+          });
+        }
+        const mapped = Array.from(merged.values());
         mapped.sort((a, b) => b.timestamp - a.timestamp);
         return mapped.slice(0, limit);
       }
@@ -1088,16 +1141,41 @@ export class WhatsAppService {
     await this.sync.warmup(() => this.forceResync());
     const chatIds = Array.from(this.messagesByChat.keys());
     if (chatIds.length > 0) {
-      const mapped = chatIds.map((jid) => ({
-        id: jid,
-        name: jid,
-        isGroup: jid.endsWith("@g.us"),
-        unreadCount: 0,
-        timestamp: 0,
-        lastMessage: includeLastMessage
+      const merged = new Map<string, SimpleChat>();
+      for (const jid of chatIds) {
+        if (jid === "status@broadcast") {
+          continue;
+        }
+        const canonicalId = this.resolveCanonicalChatId(jid);
+        const lastMessage = includeLastMessage
           ? this.getLastMessageForChat(jid)
-          : undefined,
-      }));
+          : undefined;
+        const entry: SimpleChat = {
+          id: canonicalId,
+          name: canonicalId,
+          isGroup: canonicalId.endsWith("@g.us"),
+          unreadCount: 0,
+          timestamp: lastMessage?.timestamp || 0,
+          lastMessage,
+        };
+        const existing = merged.get(canonicalId);
+        if (!existing) {
+          merged.set(canonicalId, entry);
+          continue;
+        }
+        const bestMessage =
+          (existing.lastMessage?.timestamp || 0) >=
+          (entry.lastMessage?.timestamp || 0)
+            ? existing.lastMessage
+            : entry.lastMessage;
+        merged.set(canonicalId, {
+          ...existing,
+          timestamp: Math.max(existing.timestamp, entry.timestamp),
+          lastMessage: bestMessage,
+        });
+      }
+      const mapped = Array.from(merged.values());
+      mapped.sort((a, b) => b.timestamp - a.timestamp);
       return mapped.slice(0, limit);
     }
 
