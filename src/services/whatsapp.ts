@@ -295,6 +295,61 @@ export class WhatsAppService {
     return summary.name || summary.pushname || summary.number || null;
   }
 
+  private buildSimpleContact(
+    contact: any,
+    canonicalId?: string,
+  ): SimpleContact {
+    const jid = contact?.jid || contact?.id || "";
+    const id = canonicalId || jid;
+    const number =
+      contact?.number ||
+      this.normalizePnNumber(jid) ||
+      this.normalizePnNumber(canonicalId || "") ||
+      "";
+    return {
+      id,
+      name: contact?.name || null,
+      pushname: contact?.pushname || null,
+      isMe: false,
+      isUser: true,
+      isGroup: Boolean(contact?.is_group),
+      isWAContact: true,
+      isMyContact: Boolean(contact?.is_my_contact),
+      number,
+    };
+  }
+
+  private mergeContacts(contacts: any[]): SimpleContact[] {
+    const merged = new Map<string, SimpleContact>();
+    for (const contact of contacts) {
+      const jid = contact?.jid || contact?.id || "";
+      if (!jid) continue;
+      const canonicalId = this.resolveCanonicalChatId(jid);
+      const entry = this.buildSimpleContact(contact, canonicalId);
+      const existing = merged.get(canonicalId);
+      if (!existing) {
+        merged.set(canonicalId, entry);
+        continue;
+      }
+      const name =
+        existing.name && existing.name !== existing.id
+          ? existing.name
+          : entry.name && entry.name !== entry.id
+            ? entry.name
+            : existing.name || entry.name;
+      const pushname = existing.pushname || entry.pushname;
+      const number = existing.number || entry.number;
+      merged.set(canonicalId, {
+        ...existing,
+        name,
+        pushname,
+        number,
+        isMyContact: existing.isMyContact || entry.isMyContact,
+      });
+    }
+    return Array.from(merged.values());
+  }
+
   private persistGroupMetadata(metadata: any): void {
     if (!this.storeService || !metadata) return;
     const jid = metadata?.id;
@@ -1550,17 +1605,7 @@ export class WhatsAppService {
   async searchContacts(query: string): Promise<SimpleContact[]> {
     if (this.storeService) {
       const stored = this.storeService.searchContacts(query, 50);
-      return stored.map((contact) => ({
-        id: contact.jid,
-        name: contact.name,
-        pushname: contact.pushname,
-        isMe: false,
-        isUser: true,
-        isGroup: Boolean(contact.is_group),
-        isWAContact: true,
-        isMyContact: Boolean(contact.is_my_contact),
-        number: contact.number || "",
-      }));
+      return this.mergeContacts(stored);
     }
 
     return [];
@@ -1574,11 +1619,7 @@ export class WhatsAppService {
     const hasDigits = digits.length >= 6;
 
     const contacts = this.storeService
-      ? this.storeService.listContacts(200).map((contact) => ({
-          id: contact.jid,
-          name: contact.name,
-          notify: contact.pushname,
-        }))
+      ? this.mergeContacts(this.storeService.listContacts(200))
       : [];
     const scored = contacts.map((contact) => {
       const mapped = mapContact(contact);
@@ -1671,17 +1712,15 @@ export class WhatsAppService {
         }
       }
       if (!contact) return null;
-      return {
-        id: contact.jid,
-        name: contact.name,
-        pushname: contact.pushname,
-        isMe: false,
-        isUser: true,
-        isGroup: Boolean(contact.is_group),
-        isWAContact: true,
-        isMyContact: Boolean(contact.is_my_contact),
-        number: contact.number || "",
-      };
+      const canonicalId = this.resolveCanonicalChatId(contact.jid);
+      const mapped = this.buildSimpleContact(contact, canonicalId);
+      if (!mapped.number && this.isLidJid(contact.jid)) {
+        const pn = this.storeService.getPnForLid(contact.jid);
+        if (pn?.pnNumber) {
+          mapped.number = pn.pnNumber;
+        }
+      }
+      return mapped;
     }
 
     return null;
