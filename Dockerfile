@@ -28,11 +28,16 @@ RUN npm run build
 # Production stage
 FROM node:20-bullseye-slim
 
-# Install runtime dependencies: FFmpeg and certificates
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Install runtime dependencies: FFmpeg and certificates (with retry for flaky apt)
+RUN set -e; \
+    for i in 1 2 3; do \
+      apt-get update && apt-get install -y --fix-missing \
+        ffmpeg \
+        ca-certificates \
+        && rm -rf /var/lib/apt/lists/* && break; \
+      echo "apt-get failed (attempt $i), retrying..." >&2; \
+      sleep 2; \
+    done
 
 # Create a non-root user to run the application
 RUN groupadd -r mcpuser && useradd -r -g mcpuser -G audio,video mcpuser \
