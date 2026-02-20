@@ -1187,7 +1187,9 @@ export class WhatsAppService {
             lastMessage: bestMessage,
           });
         }
-        const mapped = Array.from(merged.values());
+        const mapped = Array.from(merged.values()).filter(
+          (chat) => chat.lastMessage?.type !== "protocolMessage",
+        );
         mapped.sort((a, b) => b.timestamp - a.timestamp);
         return mapped.slice(0, limit);
       }
@@ -1229,22 +1231,34 @@ export class WhatsAppService {
           lastMessage: bestMessage,
         });
       }
-      const mapped = Array.from(merged.values());
+      const mapped = Array.from(merged.values()).filter(
+        (chat) => chat.lastMessage?.type !== "protocolMessage",
+      );
       mapped.sort((a, b) => b.timestamp - a.timestamp);
       return mapped.slice(0, limit);
     }
 
-    const mapped = chatIds.map((jid) => ({
-      id: jid,
-      name: jid,
-      isGroup: jid.endsWith("@g.us"),
-      unreadCount: 0,
-      timestamp: 0,
-      lastMessage: includeLastMessage
-        ? this.getLastMessageForChat(jid)
-        : undefined,
-    }));
+    const mapped = chatIds
+      .map((jid) => ({
+        id: jid,
+        name: jid,
+        isGroup: jid.endsWith("@g.us"),
+        unreadCount: 0,
+        timestamp: 0,
+        lastMessage: includeLastMessage
+          ? this.getLastMessageForChat(jid)
+          : undefined,
+      }))
+      .filter((chat) => chat.lastMessage?.type !== "protocolMessage");
     return mapped.slice(0, limit);
+  }
+
+  async listSystemChats(limit = 20): Promise<SimpleChat[]> {
+    const chats = await this.listChats(limit * 5, true);
+    const system = chats.filter(
+      (chat) => chat.lastMessage?.type === "protocolMessage",
+    );
+    return system.slice(0, limit);
   }
 
   async listGroups(
@@ -1420,7 +1434,7 @@ export class WhatsAppService {
 
   async sendMessage(jid: string, message: string): Promise<any> {
     const socket = this.getSocket();
-    const normalized = this.normalizeJid(jid);
+    const normalized = this.resolveLookupJid(jid);
     const isGroup = normalized.endsWith("@g.us");
     try {
       return await socket.sendMessage(normalized, { text: message });
@@ -1493,7 +1507,8 @@ export class WhatsAppService {
       caption,
       asAudioMessage,
     );
-    return await this.getSocket().sendMessage(jid, content);
+    const normalized = this.resolveLookupJid(jid);
+    return await this.getSocket().sendMessage(normalized, content);
   }
 
   async sendMediaFromBase64(
@@ -1512,7 +1527,8 @@ export class WhatsAppService {
       caption,
       asAudioMessage,
     );
-    return await this.getSocket().sendMessage(jid, content);
+    const normalized = this.resolveLookupJid(jid);
+    return await this.getSocket().sendMessage(normalized, content);
   }
 
   async downloadMedia(messageId: string): Promise<DownloadedMedia | null> {

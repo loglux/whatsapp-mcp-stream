@@ -53,6 +53,37 @@ export function registerChatTools(
   );
 
   server.tool(
+    "list_system_chats",
+    "List system chats (status/protocol events).",
+    {
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(20)
+        .describe("Maximum number of chats to return"),
+    },
+    async ({ limit }): Promise<CallToolResult> => {
+      try {
+        const chats = await whatsappService.listSystemChats(limit);
+        return {
+          content: [{ type: "text", text: JSON.stringify(chats, null, 2) }],
+        };
+      } catch (error: any) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.error(`Error in list_system_chats tool: ${message}`);
+        return {
+          content: [
+            { type: "text", text: `Error listing system chats: ${message}` },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
     "list_groups",
     "List group chats only.",
     {
