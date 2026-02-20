@@ -39,6 +39,8 @@ Supported settings:
 - `max_files_per_upload`
 - `require_upload_token`
 - `upload_token`
+- `auto_download_media`
+- `auto_download_max_mb`
 
 ## Authentication
 

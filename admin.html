@@ -221,10 +221,6 @@
                 <h4>Settings</h4>
                 <label for="mediaBaseUrl">Media Public Base URL</label>
                 <input id="mediaBaseUrl" type="text" placeholder="http://192.168.10.32:3003">
-                <div class="row">
-                    <button id="saveSettingsBtn" onclick="saveSettings()">Save Settings</button>
-                    <span id="settingsStatus"></span>
-                </div>
                 <label for="uploadMaxMb" style="margin-top: 12px;">Upload Max (MB)</label>
                 <input id="uploadMaxMb" type="text" placeholder="50">
                 <div class="row">
@@ -241,6 +237,18 @@
                 <input id="maxFilesPerUpload" type="text" placeholder="1">
                 <label for="uploadToken">Upload Token</label>
                 <input id="uploadToken" type="password" placeholder="set a token">
+                <div class="row" style="margin-top: 12px;">
+                    <label style="display:flex; align-items:center; gap:8px;">
+                        <input id="autoDownloadMedia" type="checkbox">
+                        Auto-download media
+                    </label>
+                </div>
+                <label for="autoDownloadMaxMb">Auto-download max size (MB)</label>
+                <input id="autoDownloadMaxMb" type="text" placeholder="50">
+                <div class="row" style="margin-top: 14px; justify-content: space-between; align-items: center;">
+                    <span id="settingsStatus"></span>
+                    <button id="saveSettingsBtn" onclick="saveSettings()">Save Settings</button>
+                </div>
             </div>
         </div>
 
@@ -417,6 +425,8 @@
                 document.getElementById('requireUploadToken').checked = Boolean(data.require_upload_token);
                 document.getElementById('maxFilesPerUpload').value = data.max_files_per_upload ?? 1;
                 document.getElementById('uploadToken').value = data.upload_token || '';
+                document.getElementById('autoDownloadMedia').checked = Boolean(data.auto_download_media);
+                document.getElementById('autoDownloadMaxMb').value = data.auto_download_max_mb ?? 50;
             } catch (error) {
                 logMessage('Failed to load settings', 'error');
             }
@@ -434,13 +444,18 @@
                 const maxFilesPerUploadRaw = document.getElementById('maxFilesPerUpload').value || '1';
                 const maxFilesPerUpload = Number(maxFilesPerUploadRaw);
                 const uploadToken = document.getElementById('uploadToken').value || '';
+                const autoDownloadMedia = document.getElementById('autoDownloadMedia').checked;
+                const autoDownloadMaxMbRaw = document.getElementById('autoDownloadMaxMb').value || '50';
+                const autoDownloadMaxMb = Number(autoDownloadMaxMbRaw);
                 await apiRequest('/api/settings', 'POST', {
                     media_public_base_url: mediaBaseUrl,
                     upload_max_mb: Number.isFinite(uploadMaxMb) ? uploadMaxMb : 50,
                     upload_enabled: uploadEnabled,
                     require_upload_token: requireUploadToken,
                     max_files_per_upload: Number.isFinite(maxFilesPerUpload) ? maxFilesPerUpload : 1,
-                    upload_token: uploadToken
+                    upload_token: uploadToken,
+                    auto_download_media: autoDownloadMedia,
+                    auto_download_max_mb: Number.isFinite(autoDownloadMaxMb) ? autoDownloadMaxMb : 50
                 });
                 status.textContent = 'Saved';
                 logMessage('Settings updated', 'success');

@@ -20,6 +20,8 @@ type Settings = {
   max_files_per_upload?: number;
   require_upload_token?: boolean;
   upload_token?: string;
+  auto_download_media?: boolean;
+  auto_download_max_mb?: number;
 };
 
 export function registerAdminRoutes(
@@ -79,6 +81,13 @@ export function registerAdminRoutes(
       ? process.env.REQUIRE_UPLOAD_TOKEN === "true"
       : undefined,
     upload_token: process.env.UPLOAD_TOKEN || undefined,
+    auto_download_media: process.env.AUTO_DOWNLOAD_MEDIA
+      ? process.env.AUTO_DOWNLOAD_MEDIA === "true" ||
+        process.env.AUTO_DOWNLOAD_MEDIA === "1"
+      : undefined,
+    auto_download_max_mb: process.env.AUTO_DOWNLOAD_MAX_MB
+      ? Number(process.env.AUTO_DOWNLOAD_MAX_MB)
+      : undefined,
   });
 
   const normalizeSettings = (settings: Settings): Settings => {
@@ -109,6 +118,15 @@ export function registerAdminRoutes(
     if (typeof settings.upload_token === "string") {
       normalized.upload_token = settings.upload_token;
     }
+    if (typeof settings.auto_download_media === "boolean") {
+      normalized.auto_download_media = settings.auto_download_media;
+    }
+    if (
+      typeof settings.auto_download_max_mb === "number" &&
+      Number.isFinite(settings.auto_download_max_mb)
+    ) {
+      normalized.auto_download_max_mb = settings.auto_download_max_mb;
+    }
     return normalized;
   };
 
@@ -118,6 +136,14 @@ export function registerAdminRoutes(
     runtimeSettings = settings;
     if (typeof settings.media_public_base_url === "string") {
       process.env.MEDIA_PUBLIC_BASE_URL = settings.media_public_base_url;
+    }
+    if (typeof settings.auto_download_media === "boolean") {
+      process.env.AUTO_DOWNLOAD_MEDIA = settings.auto_download_media
+        ? "true"
+        : "false";
+    }
+    if (typeof settings.auto_download_max_mb === "number") {
+      process.env.AUTO_DOWNLOAD_MAX_MB = String(settings.auto_download_max_mb);
     }
   };
 
@@ -186,6 +212,8 @@ export function registerAdminRoutes(
       max_files_per_upload: current.max_files_per_upload ?? 1,
       require_upload_token: current.require_upload_token ?? false,
       upload_token: current.upload_token || "",
+      auto_download_media: current.auto_download_media ?? false,
+      auto_download_max_mb: current.auto_download_max_mb ?? 50,
     });
   });
 
@@ -266,6 +294,32 @@ export function registerAdminRoutes(
       }
       if (body.upload_token !== undefined) {
         updates.upload_token = body.upload_token;
+      }
+
+      if (
+        body.auto_download_media !== undefined &&
+        typeof body.auto_download_media !== "boolean"
+      ) {
+        res
+          .status(400)
+          .json({ error: "auto_download_media must be a boolean" });
+        return;
+      }
+      if (body.auto_download_media !== undefined) {
+        updates.auto_download_media = body.auto_download_media;
+      }
+
+      if (
+        body.auto_download_max_mb !== undefined &&
+        typeof body.auto_download_max_mb !== "number"
+      ) {
+        res
+          .status(400)
+          .json({ error: "auto_download_max_mb must be a number" });
+        return;
+      }
+      if (body.auto_download_max_mb !== undefined) {
+        updates.auto_download_max_mb = body.auto_download_max_mb;
       }
 
       const current = mergedSettings();
