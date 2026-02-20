@@ -61,6 +61,11 @@ export class WhatsAppService {
   private readonly eventStreamPath =
     process.env.WA_EVENT_STREAM_PATH || "/app/wa-events.log";
   private eventStreamWriter: fs.WriteStream | null = null;
+  private readonly resyncReconnectEnabled =
+    (process.env.WA_RESYNC_RECONNECT || "1").toLowerCase() === "1";
+  private readonly resyncReconnectDelayMs = Number(
+    process.env.WA_RESYNC_RECONNECT_DELAY_MS || 15000,
+  );
 
   constructor() {
     const baseDir =
@@ -851,6 +856,7 @@ export class WhatsAppService {
       });
       await this.destroyInternal();
       await this.initialize();
+      this.ensureReconnectAfterResync();
     });
   }
 
@@ -869,6 +875,23 @@ export class WhatsAppService {
         // Ignore
       }
     });
+  }
+
+  private ensureReconnectAfterResync(): void {
+    if (!this.resyncReconnectEnabled) {
+      return;
+    }
+    if (!this.resyncReconnectDelayMs || this.resyncReconnectDelayMs <= 0) {
+      return;
+    }
+    setTimeout(() => {
+      if (this.isReadyFlag) return;
+      log.warn(
+        { delayMs: this.resyncReconnectDelayMs },
+        "Force resync did not reach ready state; reconnecting",
+      );
+      this.reconnect();
+    }, this.resyncReconnectDelayMs);
   }
 
   isAuthenticated(): boolean {

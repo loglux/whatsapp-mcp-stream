@@ -15,6 +15,9 @@ services:
       # Capture full Baileys event stream to file (debugging)
       - WA_EVENT_STREAM=1
       - WA_EVENT_STREAM_PATH=/app/logs/wa-events.log
+      # Reconnect safety net after force resync (1=enabled)
+      - WA_RESYNC_RECONNECT=1
+      - WA_RESYNC_RECONNECT_DELAY_MS=15000
 
       # Transport type: stdio, sse, or http (streamable HTTP)
       - TRANSPORT=http

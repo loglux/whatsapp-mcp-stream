@@ -153,6 +153,11 @@ Environment variables:
 | Variable | Default | Description |
 | --- | --- | --- |
 | `DB_PATH` | `<SESSION_DIR>/store.sqlite` | SQLite database path for chats/messages persistence. |
+| `WA_EVENT_LOG` | `0` | Enable detailed WhatsApp event logs. |
+| `WA_EVENT_STREAM` | `0` | Write raw Baileys event stream to a file for deep debugging. |
+| `WA_EVENT_STREAM_PATH` | `/app/logs/wa-events.log` | File path for the event stream log. |
+| `WA_RESYNC_RECONNECT` | `1` | Enable reconnect safety net after force resync. |
+| `WA_RESYNC_RECONNECT_DELAY_MS` | `15000` | Delay before reconnect after force resync (ms). |
 
 ## Export
 
