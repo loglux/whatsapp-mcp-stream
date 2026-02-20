@@ -48,6 +48,8 @@ export class WhatsAppService {
   private sessionReplaced = false;
   private lastDisconnectReason: string | null = null;
   private lastDisconnectAt: number | null = null;
+  private lifecycleLock: Promise<void> = Promise.resolve();
+  private reconnectAttempts = 0;
   private sessionDir: string;
   private storeService: StoreService | null = null;
   private client: BaileysClient;
@@ -267,14 +269,15 @@ export class WhatsAppService {
   }
 
   async initialize(): Promise<void> {
-    if (this.initializing) {
-      await this.initializing;
-      return;
-    }
+    await this.withLifecycleLock(async () => {
+      if (this.initializing) {
+        await this.initializing;
+        return;
+      }
 
-    this.initStoreService();
+      this.initStoreService();
 
-    this.initializing = (async () => {
+      this.initializing = (async () => {
       await this.client.initialize(async (key: any) => {
         const cached = key?.id ? this.messageKeyIndex.get(key.id) : undefined;
         return cached?.message;
@@ -301,6 +304,7 @@ export class WhatsAppService {
           this.sessionReplaced = false;
           this.lastDisconnectReason = null;
           this.lastDisconnectAt = null;
+          this.reconnectAttempts = 0;
           log.info("WhatsApp connection opened.");
           this.sync.scheduleWarmup(() => this.forceResync());
         }
@@ -552,11 +556,12 @@ export class WhatsAppService {
           }
         }
       });
-    })().finally(() => {
-      this.initializing = null;
-    });
+      })().finally(() => {
+        this.initializing = null;
+      });
 
-    await this.initializing;
+      await this.initializing;
+    });
   }
 
   private async reconnect(): Promise<void> {
@@ -565,8 +570,14 @@ export class WhatsAppService {
     }
     this.reconnecting = true;
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      await this.initialize();
+      const attempt = Math.min(this.reconnectAttempts, 6);
+      const delayMs = Math.min(30000, 1000 * Math.pow(2, attempt));
+      this.reconnectAttempts += 1;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await this.withLifecycleLock(async () => {
+        await this.destroyInternal();
+        await this.initialize();
+      });
     } catch (error) {
       log.error({ err: error }, "Reconnect failed");
     } finally {
@@ -575,43 +586,45 @@ export class WhatsAppService {
   }
 
   async forceResync(): Promise<void> {
-    await this.sync.forceResync(async () => {
-      const sock = this.getSocketOptional();
-      if (sock?.authState?.keys?.set) {
-        const resetMap: Record<string, null> = {};
-        for (const name of ALL_WA_PATCH_NAMES) {
-          resetMap[name] = null;
+    await this.withLifecycleLock(async () => {
+      await this.sync.forceResync(async () => {
+        const sock = this.getSocketOptional();
+        if (sock?.authState?.keys?.set) {
+          const resetMap: Record<string, null> = {};
+          for (const name of ALL_WA_PATCH_NAMES) {
+            resetMap[name] = null;
+          }
+          await sock.authState.keys.set({
+            "app-state-sync-version": resetMap,
+          });
+          log.info("Force resync: reset app state versions");
         }
-        await sock.authState.keys.set({
-          "app-state-sync-version": resetMap,
-        });
-        log.info("Force resync: reset app state versions");
-      }
-      if (sock?.authState?.creds) {
-        sock.authState.creds.accountSyncCounter = 0;
-        sock.ev.emit("creds.update", { accountSyncCounter: 0 });
-        log.info("Force resync: reset account sync counter");
-      }
+        if (sock?.authState?.creds) {
+          sock.authState.creds.accountSyncCounter = 0;
+          sock.ev.emit("creds.update", { accountSyncCounter: 0 });
+          log.info("Force resync: reset account sync counter");
+        }
+      });
+      await this.destroyInternal();
+      await this.initialize();
     });
-    await this.destroy();
-    await this.initialize();
   }
 
   async destroy(): Promise<void> {
-    await this.client.destroy();
-    this.sync.clearWarmupTimer();
-    this.isAuthenticatedFlag = false;
-    this.isReadyFlag = false;
-    this.latestQrCode = null;
+    await this.withLifecycleLock(async () => {
+      await this.destroyInternal();
+    });
   }
 
   async logout(): Promise<void> {
-    await this.destroy();
-    try {
-      fs.rmSync(this.sessionDir, { recursive: true, force: true });
-    } catch (_error) {
-      // Ignore
-    }
+    await this.withLifecycleLock(async () => {
+      await this.destroyInternal();
+      try {
+        fs.rmSync(this.sessionDir, { recursive: true, force: true });
+      } catch (_error) {
+        // Ignore
+      }
+    });
   }
 
   isAuthenticated(): boolean {
@@ -647,6 +660,29 @@ export class WhatsAppService {
       warmupAttempts: syncStats.warmupAttempts,
       warmupInProgress: syncStats.warmupInProgress,
     };
+  }
+
+  private async withLifecycleLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const next = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const current = this.lifecycleLock;
+    this.lifecycleLock = current.then(() => next);
+    await current;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+
+  private async destroyInternal(): Promise<void> {
+    await this.client.destroy();
+    this.sync.clearWarmupTimer();
+    this.isAuthenticatedFlag = false;
+    this.isReadyFlag = false;
+    this.latestQrCode = null;
   }
 
   getConnectionInfo(): {

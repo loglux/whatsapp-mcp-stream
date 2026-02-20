@@ -46,10 +46,63 @@ services:
     command: node --no-deprecation dist/index.js --http
     user: mcpuser
 
+  mcp-whatsapp-alt:
+    build: .
+    container_name: whatsapp-mcp-stream-alt
+    restart: always
+    ports:
+      - "3005:3001"  # MCP HTTP port (host:container)
+    environment:
+      # Logging level: fatal, error, warn, info, debug, trace
+      - LOG_LEVEL=debug
+      # Baileys logging level: silent, fatal, error, warn, info, debug, trace
+      - BAILEYS_LOG_LEVEL=info
+
+      # Transport type: stdio, sse, or http (streamable HTTP)
+      - TRANSPORT=http
+
+      # FFmpeg path (already installed in container)
+      - FFMPEG_PATH=/usr/bin/ffmpeg
+      # Media storage directory
+      - MEDIA_DIR=/app/media
+
+      # Baileys store path (persist chats/messages)
+      - STORE_PATH=/app/whatsapp-sessions/baileys/store.json
+
+      # For SSE transport, you can specify port (default: 3001)
+      - SSE_PORT=3001
+    volumes:
+      # Persist WhatsApp sessions (QR code authentication)
+      - whatsapp-sessions-alt:/app/whatsapp-sessions
+
+      # Persist logs (optional)
+      - logs-alt:/app/logs
+
+      # Persist downloaded media
+      - media-alt:/app/media
+    working_dir: /app
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    command: node --no-deprecation dist/index.js --http
+    user: mcpuser
+
 volumes:
   whatsapp-sessions:
     driver: local
+  whatsapp-sessions-alt:
+    name: whatsapp-mcp-stream_whatsapp-sessions-biz
+    driver: local
   logs:
     driver: local
+  logs-alt:
+    name: whatsapp-mcp-stream_logs-biz
+    driver: local
   media:
+    driver: local
+  media-alt:
+    name: whatsapp-mcp-stream_media-biz
     driver: local
