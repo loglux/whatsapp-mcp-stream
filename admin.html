@@ -204,6 +204,10 @@
                 <span id="resyncLoading" class="loading hidden"></span>
                 Force Resync
             </button>
+            <button id="restartWaBtn" onclick="restartWa()">
+                <span id="restartLoading" class="loading hidden"></span>
+                Restart WhatsApp
+            </button>
             <button id="logoutBtn" class="logout" onclick="logout()" disabled>
                 <span id="logoutLoading" class="loading hidden"></span>
                 Logout WhatsApp
@@ -498,6 +502,25 @@
                 setTimeout(checkStatus, 3000);
             } catch (error) {
                 logMessage('Force resync failed', 'error');
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
+        async function restartWa() {
+            if (!confirm('Restart the WhatsApp client? This will temporarily disconnect and reconnect.')) {
+                return;
+            }
+
+            const loading = document.getElementById('restartLoading');
+            loading.classList.remove('hidden');
+
+            try {
+                await apiRequest('/api/restart-wa', 'POST');
+                logMessage('WhatsApp restart requested', 'success');
+                setTimeout(checkStatus, 3000);
+            } catch (error) {
+                logMessage('WhatsApp restart failed', 'error');
             } finally {
                 loading.classList.add('hidden');
             }

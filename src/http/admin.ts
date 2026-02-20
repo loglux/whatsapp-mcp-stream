@@ -385,6 +385,23 @@ export function registerAdminRoutes(
     }
   });
 
+  app.post("/api/restart-wa", async (_req: Request, res: Response) => {
+    try {
+      res.status(202).json({ success: true, status: "started" });
+      setImmediate(async () => {
+        try {
+          await whatsapp.restart();
+          log.info("WhatsApp restart completed");
+        } catch (error) {
+          log.error({ err: error }, "Error restarting WhatsApp");
+        }
+      });
+    } catch (error) {
+      log.error("Error restarting WhatsApp:", error);
+      res.status(500).json({ error: "Failed to restart WhatsApp" });
+    }
+  });
+
   app.get("/api/export/chat/:jid", async (req: Request, res: Response) => {
     try {
       const jid = String(req.params.jid || "").trim();

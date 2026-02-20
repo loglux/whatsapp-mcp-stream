@@ -1011,6 +1011,13 @@ export class WhatsAppService {
     });
   }
 
+  async restart(): Promise<void> {
+    await this.withLifecycleLock(async () => {
+      await this.destroyInternal();
+      await this.initialize();
+    });
+  }
+
   async logout(): Promise<void> {
     await this.withLifecycleLock(async () => {
       await this.destroyInternal();
