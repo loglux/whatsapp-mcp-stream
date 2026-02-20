@@ -278,284 +278,286 @@ export class WhatsAppService {
       this.initStoreService();
 
       this.initializing = (async () => {
-      await this.client.initialize(async (key: any) => {
-        const cached = key?.id ? this.messageKeyIndex.get(key.id) : undefined;
-        return cached?.message;
-      });
+        await this.client.initialize(async (key: any) => {
+          const cached = key?.id ? this.messageKeyIndex.get(key.id) : undefined;
+          return cached?.message;
+        });
 
-      const sock = this.client.getSocket();
+        const sock = this.client.getSocket();
 
-      sock.ev.on("connection.update", (update: any) => {
-        const { connection, lastDisconnect, qr } = update;
+        sock.ev.on("connection.update", (update: any) => {
+          const { connection, lastDisconnect, qr } = update;
 
-        if (connection) {
-          log.info({ connection }, "WhatsApp connection update");
-        }
-
-        if (qr) {
-          this.latestQrCode = qr;
-          log.info("QR code received.");
-        }
-
-        if (connection === "open") {
-          this.isAuthenticatedFlag = true;
-          this.isReadyFlag = true;
-          this.latestQrCode = null;
-          this.sessionReplaced = false;
-          this.lastDisconnectReason = null;
-          this.lastDisconnectAt = null;
-          this.reconnectAttempts = 0;
-          log.info("WhatsApp connection opened.");
-          this.sync.scheduleWarmup(() => this.forceResync());
-        }
-
-        if (connection === "close") {
-          this.isReadyFlag = false;
-          this.isAuthenticatedFlag = false;
-          const statusCode = lastDisconnect?.error?.output?.statusCode;
-          const reason = lastDisconnect?.error?.message;
-          const reasonText = reason ? String(reason) : "";
-          this.lastDisconnectReason =
-            reasonText ||
-            (typeof statusCode === "number" ? String(statusCode) : null);
-          this.lastDisconnectAt = Date.now();
-          if (
-            statusCode === DisconnectReason.connectionReplaced ||
-            reasonText.toLowerCase().includes("conflict") ||
-            reasonText.toLowerCase().includes("replaced")
-          ) {
-            this.sessionReplaced = true;
+          if (connection) {
+            log.info({ connection }, "WhatsApp connection update");
           }
-          log.warn({ statusCode, reason }, "WhatsApp connection closed.");
-          if (statusCode === DisconnectReason.loggedOut) {
-            log.warn("WhatsApp logged out. Clearing session.");
-            try {
-              fs.rmSync(this.sessionDir, { recursive: true, force: true });
-            } catch (_error) {
-              // Ignore
+
+          if (qr) {
+            this.latestQrCode = qr;
+            log.info("QR code received.");
+          }
+
+          if (connection === "open") {
+            this.isAuthenticatedFlag = true;
+            this.isReadyFlag = true;
+            this.latestQrCode = null;
+            this.sessionReplaced = false;
+            this.lastDisconnectReason = null;
+            this.lastDisconnectAt = null;
+            this.reconnectAttempts = 0;
+            log.info("WhatsApp connection opened.");
+            this.sync.scheduleWarmup(() => this.forceResync());
+          }
+
+          if (connection === "close") {
+            this.isReadyFlag = false;
+            this.isAuthenticatedFlag = false;
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const reason = lastDisconnect?.error?.message;
+            const reasonText = reason ? String(reason) : "";
+            this.lastDisconnectReason =
+              reasonText ||
+              (typeof statusCode === "number" ? String(statusCode) : null);
+            this.lastDisconnectAt = Date.now();
+            if (
+              statusCode === DisconnectReason.connectionReplaced ||
+              reasonText.toLowerCase().includes("conflict") ||
+              reasonText.toLowerCase().includes("replaced")
+            ) {
+              this.sessionReplaced = true;
             }
-            this.reconnect().catch((err) =>
-              log.error({ err }, "Failed to reconnect WhatsApp"),
-            );
-          } else if (
-            statusCode === 401 ||
-            reason?.includes("Connection Failure")
-          ) {
-            log.warn(
-              "WhatsApp connection failed. Resetting session and reconnecting.",
-            );
-            try {
-              fs.rmSync(this.sessionDir, { recursive: true, force: true });
-            } catch (_error) {
-              // Ignore
-            }
-            this.reconnect().catch((err) =>
-              log.error({ err }, "Failed to reconnect WhatsApp"),
-            );
-          } else {
-            this.reconnect().catch((err) =>
-              log.error({ err }, "Failed to reconnect WhatsApp"),
-            );
-          }
-        }
-      });
-
-      sock.ev.on("messages.upsert", (ev: any) => {
-        if (!ev?.messages) return;
-        for (const msg of ev.messages) {
-          this.trackMessage(msg);
-          this.upsertStoredMessage(msg);
-          const jid = msg?.key?.remoteJid;
-          if (jid) {
-            this.upsertStoredChat({
-              id: jid,
-              conversationTimestamp: msg?.messageTimestamp,
-            });
-          }
-        }
-      });
-
-      sock.ev.on("messages.update", (updates: any[]) => {
-        if (!updates) return;
-        for (const update of updates) {
-          const key =
-            update?.key?.remoteJid && update?.key?.id
-              ? `${update.key.remoteJid}:${update.key.id}`
-              : null;
-          if (key && this.messageIndex.has(key)) {
-            const existing = this.messageIndex.get(key);
-            const merged = {
-              ...existing,
-              ...update.update,
-              message: {
-                ...(existing.message || {}),
-                ...(update.update?.message || {}),
-              },
-            };
-            this.messageIndex.set(key, merged);
-            if (update.update?.message) {
-              this.updateStoredMessageContent(merged);
-            }
-          } else if (update?.update?.message && update?.key?.remoteJid) {
-            const synthetic = {
-              key: update.key,
-              message: update.update.message,
-              messageTimestamp:
-                update.update?.messageTimestamp ?? update.update?.timestamp ?? 0,
-            };
-            this.updateStoredMessageContent(synthetic);
-          }
-        }
-      });
-
-      sock.ev.on("messages.media-update", (updates: any[]) => {
-        if (!updates) return;
-        for (const update of updates) {
-          const key = update?.key;
-          const msgId = this.serializeKeyId(key);
-          if (this.messageIndex.has(msgId)) {
-            const existing = this.messageIndex.get(msgId);
-            const merged = {
-              ...existing,
-              media: {
-                ...(existing.media || {}),
-                ...(update.media || {}),
-              },
-            };
-            this.messageIndex.set(msgId, merged);
-          }
-        }
-      });
-
-      sock.ev.on("messages.reaction", (updates: any[]) => {
-        if (!updates) return;
-        for (const update of updates) {
-          const key = update?.key;
-          const msgId = this.serializeKeyId(key);
-          if (this.messageIndex.has(msgId)) {
-            const existing = this.messageIndex.get(msgId);
-            const reaction = update?.reaction;
-            const merged = {
-              ...existing,
-              reactions: reaction
-                ? [...(existing.reactions || []), reaction]
-                : existing.reactions,
-            };
-            this.messageIndex.set(msgId, merged);
-          }
-          if (this.storeService) {
-            try {
-              this.storeService.insertMessageReaction(
-                msgId,
-                JSON.stringify(update),
+            log.warn({ statusCode, reason }, "WhatsApp connection closed.");
+            if (statusCode === DisconnectReason.loggedOut) {
+              log.warn("WhatsApp logged out. Clearing session.");
+              try {
+                fs.rmSync(this.sessionDir, { recursive: true, force: true });
+              } catch (_error) {
+                // Ignore
+              }
+              this.reconnect().catch((err) =>
+                log.error({ err }, "Failed to reconnect WhatsApp"),
               );
-            } catch (error) {
-              log.warn({ err: error }, "Failed to persist message reaction");
-            }
-          }
-        }
-      });
-
-      sock.ev.on("message-receipt.update", (updates: any[]) => {
-        if (!updates) return;
-        for (const update of updates) {
-          const key = update?.key;
-          const msgId = this.serializeKeyId(key);
-          if (this.messageIndex.has(msgId)) {
-            const existing = this.messageIndex.get(msgId);
-            const receipts = update?.receipt;
-            const merged = {
-              ...existing,
-              receipts: receipts
-                ? [...(existing.receipts || []), receipts]
-                : existing.receipts,
-            };
-            this.messageIndex.set(msgId, merged);
-          }
-          if (this.storeService) {
-            try {
-              this.storeService.insertMessageReceipt(
-                msgId,
-                JSON.stringify(update),
+            } else if (
+              statusCode === 401 ||
+              reason?.includes("Connection Failure")
+            ) {
+              log.warn(
+                "WhatsApp connection failed. Resetting session and reconnecting.",
               );
-            } catch (error) {
-              log.warn({ err: error }, "Failed to persist message receipt");
+              try {
+                fs.rmSync(this.sessionDir, { recursive: true, force: true });
+              } catch (_error) {
+                // Ignore
+              }
+              this.reconnect().catch((err) =>
+                log.error({ err }, "Failed to reconnect WhatsApp"),
+              );
+            } else {
+              this.reconnect().catch((err) =>
+                log.error({ err }, "Failed to reconnect WhatsApp"),
+              );
             }
           }
-        }
-      });
+        });
 
-      sock.ev.on("messages.delete", (payload: any) => {
-        if (!payload) return;
-        if (payload.all && payload.jid) {
-          if (this.storeService) {
-            this.storeService.deleteMessagesByChat(payload.jid);
+        sock.ev.on("messages.upsert", (ev: any) => {
+          if (!ev?.messages) return;
+          for (const msg of ev.messages) {
+            this.trackMessage(msg);
+            this.upsertStoredMessage(msg);
+            const jid = msg?.key?.remoteJid;
+            if (jid) {
+              this.upsertStoredChat({
+                id: jid,
+                conversationTimestamp: msg?.messageTimestamp,
+              });
+            }
           }
-          this.messagesByChat.delete(payload.jid);
-          return;
-        }
-        const keys = payload.keys || [];
-        for (const key of keys) {
-          const jid = key?.remoteJid;
-          const id = key?.id;
-          if (!jid || !id) continue;
-          const msgId = `${jid}:${id}`;
-          this.messageIndex.delete(msgId);
-          this.messageKeyIndex.delete(id);
-          const list = this.messagesByChat.get(jid);
-          if (list?.length) {
-            const filtered = list.filter((msg: any) => msg?.key?.id !== id);
-            this.messagesByChat.set(jid, filtered);
+        });
+
+        sock.ev.on("messages.update", (updates: any[]) => {
+          if (!updates) return;
+          for (const update of updates) {
+            const key =
+              update?.key?.remoteJid && update?.key?.id
+                ? `${update.key.remoteJid}:${update.key.id}`
+                : null;
+            if (key && this.messageIndex.has(key)) {
+              const existing = this.messageIndex.get(key);
+              const merged = {
+                ...existing,
+                ...update.update,
+                message: {
+                  ...(existing.message || {}),
+                  ...(update.update?.message || {}),
+                },
+              };
+              this.messageIndex.set(key, merged);
+              if (update.update?.message) {
+                this.updateStoredMessageContent(merged);
+              }
+            } else if (update?.update?.message && update?.key?.remoteJid) {
+              const synthetic = {
+                key: update.key,
+                message: update.update.message,
+                messageTimestamp:
+                  update.update?.messageTimestamp ??
+                  update.update?.timestamp ??
+                  0,
+              };
+              this.updateStoredMessageContent(synthetic);
+            }
           }
-          if (this.storeService) {
-            this.storeService.deleteMessageById(msgId);
+        });
+
+        sock.ev.on("messages.media-update", (updates: any[]) => {
+          if (!updates) return;
+          for (const update of updates) {
+            const key = update?.key;
+            const msgId = this.serializeKeyId(key);
+            if (this.messageIndex.has(msgId)) {
+              const existing = this.messageIndex.get(msgId);
+              const merged = {
+                ...existing,
+                media: {
+                  ...(existing.media || {}),
+                  ...(update.media || {}),
+                },
+              };
+              this.messageIndex.set(msgId, merged);
+            }
           }
-        }
-      });
+        });
 
-      sock.ev.on("chats.set", (payload: any) => {
-        this.sync.handleChatsSet(payload);
-      });
-
-      sock.ev.on("messages.set", (payload: any) => {
-        this.sync.handleMessagesSet(payload);
-      });
-
-      sock.ev.on("chats.upsert", (payload: any) => {
-        this.sync.handleChatsUpsert(payload);
-      });
-
-      sock.ev.on("chats.update", (payload: any) => {
-        this.sync.handleChatsUpdate(payload);
-      });
-
-      sock.ev.on("contacts.upsert", (payload: any) => {
-        if (payload && Array.isArray(payload)) {
-          log.info({ count: payload.length }, "Contacts upsert");
-          for (const contact of payload) {
-            this.upsertStoredContact(contact);
+        sock.ev.on("messages.reaction", (updates: any[]) => {
+          if (!updates) return;
+          for (const update of updates) {
+            const key = update?.key;
+            const msgId = this.serializeKeyId(key);
+            if (this.messageIndex.has(msgId)) {
+              const existing = this.messageIndex.get(msgId);
+              const reaction = update?.reaction;
+              const merged = {
+                ...existing,
+                reactions: reaction
+                  ? [...(existing.reactions || []), reaction]
+                  : existing.reactions,
+              };
+              this.messageIndex.set(msgId, merged);
+            }
+            if (this.storeService) {
+              try {
+                this.storeService.insertMessageReaction(
+                  msgId,
+                  JSON.stringify(update),
+                );
+              } catch (error) {
+                log.warn({ err: error }, "Failed to persist message reaction");
+              }
+            }
           }
-        }
-      });
+        });
 
-      sock.ev.on("contacts.update", (payload: any) => {
-        if (payload && Array.isArray(payload)) {
-          log.info({ count: payload.length }, "Contacts update");
-          for (const contact of payload) {
-            this.upsertStoredContact(contact);
+        sock.ev.on("message-receipt.update", (updates: any[]) => {
+          if (!updates) return;
+          for (const update of updates) {
+            const key = update?.key;
+            const msgId = this.serializeKeyId(key);
+            if (this.messageIndex.has(msgId)) {
+              const existing = this.messageIndex.get(msgId);
+              const receipts = update?.receipt;
+              const merged = {
+                ...existing,
+                receipts: receipts
+                  ? [...(existing.receipts || []), receipts]
+                  : existing.receipts,
+              };
+              this.messageIndex.set(msgId, merged);
+            }
+            if (this.storeService) {
+              try {
+                this.storeService.insertMessageReceipt(
+                  msgId,
+                  JSON.stringify(update),
+                );
+              } catch (error) {
+                log.warn({ err: error }, "Failed to persist message receipt");
+              }
+            }
           }
-        }
-      });
+        });
 
-      sock.ev.on("messaging-history.set", (payload: any) => {
-        this.sync.handleMessagingHistorySet(payload);
-        const contacts = payload?.contacts;
-        if (contacts && Array.isArray(contacts)) {
-          for (const contact of contacts) {
-            this.upsertStoredContact(contact);
+        sock.ev.on("messages.delete", (payload: any) => {
+          if (!payload) return;
+          if (payload.all && payload.jid) {
+            if (this.storeService) {
+              this.storeService.deleteMessagesByChat(payload.jid);
+            }
+            this.messagesByChat.delete(payload.jid);
+            return;
           }
-        }
-      });
+          const keys = payload.keys || [];
+          for (const key of keys) {
+            const jid = key?.remoteJid;
+            const id = key?.id;
+            if (!jid || !id) continue;
+            const msgId = `${jid}:${id}`;
+            this.messageIndex.delete(msgId);
+            this.messageKeyIndex.delete(id);
+            const list = this.messagesByChat.get(jid);
+            if (list?.length) {
+              const filtered = list.filter((msg: any) => msg?.key?.id !== id);
+              this.messagesByChat.set(jid, filtered);
+            }
+            if (this.storeService) {
+              this.storeService.deleteMessageById(msgId);
+            }
+          }
+        });
+
+        sock.ev.on("chats.set", (payload: any) => {
+          this.sync.handleChatsSet(payload);
+        });
+
+        sock.ev.on("messages.set", (payload: any) => {
+          this.sync.handleMessagesSet(payload);
+        });
+
+        sock.ev.on("chats.upsert", (payload: any) => {
+          this.sync.handleChatsUpsert(payload);
+        });
+
+        sock.ev.on("chats.update", (payload: any) => {
+          this.sync.handleChatsUpdate(payload);
+        });
+
+        sock.ev.on("contacts.upsert", (payload: any) => {
+          if (payload && Array.isArray(payload)) {
+            log.info({ count: payload.length }, "Contacts upsert");
+            for (const contact of payload) {
+              this.upsertStoredContact(contact);
+            }
+          }
+        });
+
+        sock.ev.on("contacts.update", (payload: any) => {
+          if (payload && Array.isArray(payload)) {
+            log.info({ count: payload.length }, "Contacts update");
+            for (const contact of payload) {
+              this.upsertStoredContact(contact);
+            }
+          }
+        });
+
+        sock.ev.on("messaging-history.set", (payload: any) => {
+          this.sync.handleMessagingHistorySet(payload);
+          const contacts = payload?.contacts;
+          if (contacts && Array.isArray(contacts)) {
+            for (const contact of contacts) {
+              this.upsertStoredContact(contact);
+            }
+          }
+        });
       })().finally(() => {
         this.initializing = null;
       });
@@ -761,7 +763,9 @@ export class WhatsAppService {
         isGroup: jid.endsWith("@g.us"),
         unreadCount: 0,
         timestamp: 0,
-        lastMessage: includeLastMessage ? this.getLastMessageForChat(jid) : undefined,
+        lastMessage: includeLastMessage
+          ? this.getLastMessageForChat(jid)
+          : undefined,
       }));
       return mapped.slice(0, limit);
     }
@@ -772,7 +776,9 @@ export class WhatsAppService {
       isGroup: jid.endsWith("@g.us"),
       unreadCount: 0,
       timestamp: 0,
-      lastMessage: includeLastMessage ? this.getLastMessageForChat(jid) : undefined,
+      lastMessage: includeLastMessage
+        ? this.getLastMessageForChat(jid)
+        : undefined,
     }));
     return mapped.slice(0, limit);
   }

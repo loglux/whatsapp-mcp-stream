@@ -95,8 +95,7 @@ export function mapContact(contact: any): SimpleContact {
         : typeof contact?.isWAContact === "boolean"
           ? contact.isWAContact
           : false;
-  const isMe =
-    typeof contact?.isMe === "boolean" ? contact.isMe : false;
+  const isMe = typeof contact?.isMe === "boolean" ? contact.isMe : false;
   return {
     id,
     name: contact?.name || contact?.verifiedName || contact?.notify || null,
