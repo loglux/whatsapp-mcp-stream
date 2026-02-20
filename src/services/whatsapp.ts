@@ -169,6 +169,23 @@ export class WhatsAppService {
     this.storeService.upsertContact(record);
   }
 
+  private getContactSummary(jid: string): {
+    name: string | null;
+    pushname: string | null;
+    number: string | null;
+    is_my_contact: boolean | null;
+  } | null {
+    if (!this.storeService || !jid) return null;
+    const contact = this.storeService.getContactById(jid);
+    if (!contact) return null;
+    return {
+      name: contact.name || null,
+      pushname: contact.pushname || null,
+      number: contact.number || null,
+      is_my_contact: contact.is_my_contact ? true : false,
+    };
+  }
+
   private persistGroupMetadata(metadata: any): void {
     if (!this.storeService || !metadata) return;
     const jid = metadata?.id;
@@ -212,10 +229,14 @@ export class WhatsAppService {
       size: meta.size,
       creation: meta.creation,
       desc: meta.desc,
-      participants: participants.map((p: StoredGroupParticipant) => ({
-        id: p.participant_jid,
-        admin: p.admin,
-      })),
+      participants: participants.map((p: StoredGroupParticipant) => {
+        const contact = this.getContactSummary(p.participant_jid);
+        return {
+          id: p.participant_jid,
+          admin: p.admin,
+          ...contact,
+        };
+      }),
     };
   }
 
@@ -922,7 +943,20 @@ export class WhatsAppService {
     try {
       const metadata = await socket.groupMetadata(normalized);
       this.persistGroupMetadata(metadata);
-      return metadata;
+      const participants = Array.isArray(metadata?.participants)
+        ? metadata.participants.map((p: any) => {
+            const jid = this.normalizeJid(p?.id || "");
+            const contact = jid ? this.getContactSummary(jid) : null;
+            return {
+              ...p,
+              ...(contact || {}),
+            };
+          })
+        : metadata?.participants;
+      return {
+        ...metadata,
+        participants,
+      };
     } catch (error: any) {
       if (this.storeService) {
         const cached = this.getCachedGroupInfo(normalized);
