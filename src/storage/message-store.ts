@@ -255,6 +255,15 @@ export class MessageStore {
     return stmt.all(jid);
   }
 
+  getMessageById(id: string): StoredMessage | null {
+    const stmt = this.db.prepare(
+      `SELECT id, chat_jid, sender, recipient, timestamp, from_me, body, has_media, type
+       FROM messages
+       WHERE id = ?`,
+    );
+    return stmt.get(id) || null;
+  }
+
   deleteMessageById(id: string): void {
     const stmt = this.db.prepare(`DELETE FROM messages WHERE id = ?`);
     stmt.run(id);

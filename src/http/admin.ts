@@ -22,6 +22,7 @@ type Settings = {
   upload_token?: string;
   auto_download_media?: boolean;
   auto_download_max_mb?: number;
+  auto_select_contact?: boolean;
 };
 
 export function registerAdminRoutes(
@@ -88,6 +89,10 @@ export function registerAdminRoutes(
     auto_download_max_mb: process.env.AUTO_DOWNLOAD_MAX_MB
       ? Number(process.env.AUTO_DOWNLOAD_MAX_MB)
       : undefined,
+    auto_select_contact: process.env.AUTO_SELECT_CONTACT
+      ? process.env.AUTO_SELECT_CONTACT === "true" ||
+        process.env.AUTO_SELECT_CONTACT === "1"
+      : undefined,
   });
 
   const normalizeSettings = (settings: Settings): Settings => {
@@ -123,9 +128,13 @@ export function registerAdminRoutes(
     }
     if (
       typeof settings.auto_download_max_mb === "number" &&
-      Number.isFinite(settings.auto_download_max_mb)
+      Number.isFinite(settings.auto_download_max_mb) &&
+      settings.auto_download_max_mb >= 0
     ) {
       normalized.auto_download_max_mb = settings.auto_download_max_mb;
+    }
+    if (typeof settings.auto_select_contact === "boolean") {
+      normalized.auto_select_contact = settings.auto_select_contact;
     }
     return normalized;
   };
@@ -144,6 +153,11 @@ export function registerAdminRoutes(
     }
     if (typeof settings.auto_download_max_mb === "number") {
       process.env.AUTO_DOWNLOAD_MAX_MB = String(settings.auto_download_max_mb);
+    }
+    if (typeof settings.auto_select_contact === "boolean") {
+      process.env.AUTO_SELECT_CONTACT = settings.auto_select_contact
+        ? "true"
+        : "false";
     }
   };
 
@@ -214,6 +228,7 @@ export function registerAdminRoutes(
       upload_token: current.upload_token || "",
       auto_download_media: current.auto_download_media ?? false,
       auto_download_max_mb: current.auto_download_max_mb ?? 50,
+      auto_select_contact: current.auto_select_contact ?? false,
     });
   });
 
@@ -320,6 +335,19 @@ export function registerAdminRoutes(
       }
       if (body.auto_download_max_mb !== undefined) {
         updates.auto_download_max_mb = body.auto_download_max_mb;
+      }
+
+      if (
+        body.auto_select_contact !== undefined &&
+        typeof body.auto_select_contact !== "boolean"
+      ) {
+        res
+          .status(400)
+          .json({ error: "auto_select_contact must be a boolean" });
+        return;
+      }
+      if (body.auto_select_contact !== undefined) {
+        updates.auto_select_contact = body.auto_select_contact;
       }
 
       const current = mergedSettings();

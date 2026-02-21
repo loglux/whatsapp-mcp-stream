@@ -50,6 +50,14 @@ export class WhatsAppService {
   private lastDisconnectAt: number | null = null;
   private lifecycleLock: Promise<void> = Promise.resolve();
   private reconnectAttempts = 0;
+  private readonly maxMessageIndexSize = Math.max(
+    1000,
+    Number(process.env.WA_MESSAGE_INDEX_MAX || 20000) || 20000,
+  );
+  private readonly maxMessageKeyIndexSize = Math.max(
+    1000,
+    Number(process.env.WA_MESSAGE_KEY_INDEX_MAX || 20000) || 20000,
+  );
   private sessionDir: string;
   private storeService: StoreService | null = null;
   private client: BaileysClient;
@@ -242,6 +250,30 @@ export class WhatsAppService {
     return normalized;
   }
 
+  private getRelatedJids(jid: string): string[] {
+    const normalized = this.normalizeJid(jid);
+    if (!normalized) return [];
+    if (!this.storeService) return [normalized];
+    const related = new Set<string>();
+    related.add(normalized);
+    if (this.isLidJid(normalized)) {
+      const mapped = this.storeService.getPnForLid(normalized);
+      if (mapped?.pnJid) related.add(mapped.pnJid);
+    } else {
+      const lidFromPn = this.storeService.getLidForPn(normalized);
+      if (lidFromPn) {
+        related.add(lidFromPn);
+      } else {
+        const pnNumber = this.normalizePnNumber(normalized);
+        if (pnNumber) {
+          const lid = this.storeService.getLidForPn(pnNumber);
+          if (lid) related.add(lid);
+        }
+      }
+    }
+    return Array.from(related);
+  }
+
   private resolveCanonicalChatId(jid: string): string {
     const normalized = this.normalizeJid(jid);
     if (!this.storeService || !normalized) return normalized;
@@ -368,6 +400,20 @@ export class WhatsAppService {
     return summary.name || summary.pushname || summary.number || null;
   }
 
+  private getBestChatName(
+    related: string[],
+    canonicalId: string,
+    storedName: string | null | undefined,
+  ): string | null {
+    if (storedName && storedName !== canonicalId) return storedName;
+    for (const jid of related) {
+      const name = this.getBestContactName(jid);
+      if (name) return name;
+    }
+    const fallback = this.getBestContactName(canonicalId);
+    return fallback || storedName || null;
+  }
+
   private buildSimpleContact(
     contact: any,
     canonicalId?: string,
@@ -487,10 +533,15 @@ export class WhatsAppService {
 
   private trackMessage(msg: any): void {
     const id = this.serializeMessageId(msg);
-    this.messageIndex.set(id, msg);
+    this.setBoundedMapEntry(this.messageIndex, id, msg, this.maxMessageIndexSize);
     const keyId = msg?.key?.id;
     if (keyId) {
-      this.messageKeyIndex.set(keyId, msg);
+      this.setBoundedMapEntry(
+        this.messageKeyIndex,
+        keyId,
+        msg,
+        this.maxMessageKeyIndexSize,
+      );
     }
     const jid = msg?.key?.remoteJid;
     if (!jid) return;
@@ -501,6 +552,23 @@ export class WhatsAppService {
       list.splice(0, list.length - 500);
     }
     this.messagesByChat.set(jid, list);
+  }
+
+  private setBoundedMapEntry<K, V>(
+    map: Map<K, V>,
+    key: K,
+    value: V,
+    maxSize: number,
+  ): void {
+    if (map.has(key)) {
+      map.delete(key);
+    }
+    map.set(key, value);
+    while (map.size > maxSize) {
+      const oldestKey = map.keys().next().value;
+      if (oldestKey === undefined) break;
+      map.delete(oldestKey);
+    }
   }
 
   private async buildMediaMessage(
@@ -717,7 +785,12 @@ export class WhatsAppService {
                   ...(update.update?.message || {}),
                 },
               };
-              this.messageIndex.set(key, merged);
+              this.setBoundedMapEntry(
+                this.messageIndex,
+                key,
+                merged,
+                this.maxMessageIndexSize,
+              );
               if (update.update?.message) {
                 this.updateStoredMessageContent(merged);
               }
@@ -752,7 +825,12 @@ export class WhatsAppService {
                   ...(update.media || {}),
                 },
               };
-              this.messageIndex.set(msgId, merged);
+              this.setBoundedMapEntry(
+                this.messageIndex,
+                msgId,
+                merged,
+                this.maxMessageIndexSize,
+              );
             }
           }
         });
@@ -774,7 +852,12 @@ export class WhatsAppService {
                   ? [...(existing.reactions || []), reaction]
                   : existing.reactions,
               };
-              this.messageIndex.set(msgId, merged);
+              this.setBoundedMapEntry(
+                this.messageIndex,
+                msgId,
+                merged,
+                this.maxMessageIndexSize,
+              );
             }
             if (this.storeService) {
               try {
@@ -806,7 +889,12 @@ export class WhatsAppService {
                   ? [...(existing.receipts || []), receipts]
                   : existing.receipts,
               };
-              this.messageIndex.set(msgId, merged);
+              this.setBoundedMapEntry(
+                this.messageIndex,
+                msgId,
+                merged,
+                this.maxMessageIndexSize,
+              );
             }
             if (this.storeService) {
               try {
@@ -1218,9 +1306,11 @@ export class WhatsAppService {
   async listChats(
     limit = 20,
     includeLastMessage = true,
+    includeSystemMessages = false,
   ): Promise<SimpleChat[]> {
     if (this.storeService) {
-      const stored = this.storeService.listChats(limit);
+      const expandedLimit = Math.max(limit * 5, 50);
+      const stored = this.storeService.listChats(expandedLimit);
       if (stored.length > 0) {
         const merged = new Map<string, SimpleChat>();
         for (const chat of stored) {
@@ -1228,15 +1318,15 @@ export class WhatsAppService {
             continue;
           }
           const canonicalId = this.resolveCanonicalChatId(chat.id);
+          const related = this.getRelatedJids(chat.id);
           const lastMessage = includeLastMessage
             ? this.getLastMessageForChat(chat.id)
             : undefined;
-          const fallbackName =
-            chat.name && chat.name !== chat.id
-              ? chat.name
-              : this.getBestContactName(chat.id) ||
-                this.getBestContactName(canonicalId) ||
-                chat.name;
+          const fallbackName = this.getBestChatName(
+            related,
+            canonicalId,
+            chat.name,
+          );
           const entry: SimpleChat = {
             id: canonicalId,
             name: fallbackName || chat.name,
@@ -1269,7 +1359,8 @@ export class WhatsAppService {
           });
         }
         const mapped = Array.from(merged.values()).filter(
-          (chat) => chat.lastMessage?.type !== "protocolMessage",
+          (chat) =>
+            includeSystemMessages || chat.lastMessage?.type !== "protocolMessage",
         );
         mapped.sort((a, b) => b.timestamp - a.timestamp);
         return mapped.slice(0, limit);
@@ -1313,7 +1404,8 @@ export class WhatsAppService {
         });
       }
       const mapped = Array.from(merged.values()).filter(
-        (chat) => chat.lastMessage?.type !== "protocolMessage",
+        (chat) =>
+          includeSystemMessages || chat.lastMessage?.type !== "protocolMessage",
       );
       mapped.sort((a, b) => b.timestamp - a.timestamp);
       return mapped.slice(0, limit);
@@ -1330,12 +1422,15 @@ export class WhatsAppService {
           ? this.getLastMessageForChat(jid)
           : undefined,
       }))
-      .filter((chat) => chat.lastMessage?.type !== "protocolMessage");
+      .filter(
+        (chat) =>
+          includeSystemMessages || chat.lastMessage?.type !== "protocolMessage",
+      );
     return mapped.slice(0, limit);
   }
 
   async listSystemChats(limit = 20): Promise<SimpleChat[]> {
-    const chats = await this.listChats(limit * 5, true);
+    const chats = await this.listChats(limit * 5, true, true);
     const system = chats.filter(
       (chat) => chat.lastMessage?.type === "protocolMessage",
     );
@@ -1352,32 +1447,71 @@ export class WhatsAppService {
   }
 
   async getChatById(jid: string): Promise<SimpleChat | null> {
-    const normalized = this.resolveLookupJid(jid);
     if (this.storeService) {
-      const stored = this.storeService.getChatById(normalized);
-      if (!stored) return null;
-      return {
-        id: stored.id,
-        name: stored.name,
-        isGroup: Boolean(stored.is_group),
-        unreadCount: stored.unread_count || 0,
-        timestamp: stored.timestamp || 0,
-        lastMessage: this.getLastMessageForChat(stored.id),
-      };
+      const related = this.getRelatedJids(jid);
+      const merged = new Map<string, SimpleChat>();
+      for (const entry of related) {
+        const stored = this.storeService.getChatById(entry);
+        if (!stored) continue;
+        const canonicalId = this.resolveCanonicalChatId(stored.id);
+        const name = this.getBestChatName(
+          related,
+          canonicalId,
+          stored.name,
+        );
+        const candidate: SimpleChat = {
+          id: canonicalId,
+          name: name || stored.name,
+          isGroup: Boolean(stored.is_group),
+          unreadCount: stored.unread_count || 0,
+          timestamp: stored.timestamp || 0,
+          lastMessage: this.getLastMessageForChat(canonicalId),
+        };
+        const existing = merged.get(canonicalId);
+        if (!existing) {
+          merged.set(canonicalId, candidate);
+          continue;
+        }
+        const existingTs = existing.timestamp || 0;
+        const candidateTs = candidate.timestamp || 0;
+        merged.set(canonicalId, {
+          ...existing,
+          name:
+            existing.name && existing.name !== existing.id
+              ? existing.name
+              : candidate.name,
+          unreadCount: Math.max(existing.unreadCount, candidate.unreadCount),
+          timestamp: Math.max(existingTs, candidateTs),
+          lastMessage:
+            (existing.lastMessage?.timestamp || 0) >=
+            (candidate.lastMessage?.timestamp || 0)
+              ? existing.lastMessage
+              : candidate.lastMessage,
+        });
+      }
+      const mergedList = Array.from(merged.values());
+      if (mergedList.length === 0) return null;
+      mergedList.sort((a, b) => b.timestamp - a.timestamp);
+      return mergedList[0];
     }
 
     return null;
   }
 
   async getMessages(jid: string, limit = 50): Promise<SimpleMessage[]> {
-    const normalized = this.resolveLookupJid(jid);
-    const fromMemory = (this.messagesByChat.get(normalized) || []).map((msg) =>
-      mapMessage(msg, this.serializeMessageId.bind(this)),
+    const related = this.getRelatedJids(jid);
+    const perLimit =
+      related.length > 1 ? Math.max(limit * 2, 100) : limit;
+    const fromMemory = related.flatMap((entry) =>
+      (this.messagesByChat.get(entry) || []).map((msg) =>
+        mapMessage(msg, this.serializeMessageId.bind(this)),
+      ),
     );
-    const fromDb = this.storeService
-      ? this.storeService
-          .listMessages(normalized, limit)
-          .map((msg) => mapStoredMessage(msg))
+    const store = this.storeService;
+    const fromDb = store
+      ? related.flatMap((entry) =>
+          store.listMessages(entry, perLimit).map((msg) => mapStoredMessage(msg)),
+        )
       : [];
 
     const merged = new Map<string, SimpleMessage>();
@@ -1463,8 +1597,16 @@ export class WhatsAppService {
 
   async getMessageById(messageId: string): Promise<SimpleMessage | null> {
     const msg = this.messageIndex.get(messageId);
-    if (!msg) return null;
-    return mapMessage(msg, this.serializeMessageId.bind(this));
+    if (msg) {
+      return mapMessage(msg, this.serializeMessageId.bind(this));
+    }
+    if (this.storeService) {
+      const stored = this.storeService.getMessageById(messageId);
+      if (stored) {
+        return mapStoredMessage(stored);
+      }
+    }
+    return null;
   }
 
   async getProfilePicUrl(jid: string): Promise<string | null> {
@@ -1824,18 +1966,27 @@ export class WhatsAppService {
   }
 
   private getLastMessageForChat(jid: string): SimpleMessage | undefined {
+    const candidates: SimpleMessage[] = [];
     if (this.storeService) {
-      const resolved = this.resolveLookupJid(jid);
-      const stored = this.storeService.listMessages(resolved, 1);
-      if (stored.length > 0) {
-        return mapStoredMessage(stored[0]);
+      const related = this.getRelatedJids(jid);
+      for (const entry of related) {
+        const stored = this.storeService.listMessages(entry, 1);
+        if (stored.length > 0) {
+          candidates.push(mapStoredMessage(stored[0]));
+        }
       }
     }
-    const list = this.messagesByChat.get(jid) || [];
-    const last = list[list.length - 1];
-    if (last) {
-      return mapMessage(last, this.serializeMessageId.bind(this));
+    const related = this.getRelatedJids(jid);
+    for (const entry of related) {
+      const list = this.messagesByChat.get(entry) || [];
+      const last = list[list.length - 1];
+      if (last) {
+        candidates.push(mapMessage(last, this.serializeMessageId.bind(this)));
+      }
     }
-    return undefined;
+    if (candidates.length === 0) return undefined;
+    return candidates.reduce((best, curr) =>
+      (best.timestamp || 0) >= (curr.timestamp || 0) ? best : curr,
+    );
   }
 }

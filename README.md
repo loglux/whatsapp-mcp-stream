@@ -93,6 +93,20 @@ Typical flow:
 
 Note: clients must send `Accept: application/json, text/event-stream` on `initialize`.
 
+## Smoke Test
+
+Quick regression smoke for MCP tools:
+
+```bash
+npm run smoke:mcp
+```
+
+Optional custom target:
+
+```bash
+MCP_BASE_URL=http://localhost:3003 npm run smoke:mcp
+```
+
 ## MCP Tools
 
 ### Auth
@@ -165,6 +179,8 @@ Environment variables:
 | `WA_EVENT_STREAM_PATH` | `/app/logs/wa-events.log` | File path for the event stream log. |
 | `WA_RESYNC_RECONNECT` | `1` | Enable reconnect safety net after force resync. |
 | `WA_RESYNC_RECONNECT_DELAY_MS` | `15000` | Delay before reconnect after force resync (ms). |
+| `WA_MESSAGE_INDEX_MAX` | `20000` | Max in-memory entries for message index (`jid:id` -> raw message). |
+| `WA_MESSAGE_KEY_INDEX_MAX` | `20000` | Max in-memory entries for message key index (`id` -> raw message). |
 
 ## Export
 

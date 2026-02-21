@@ -267,6 +267,11 @@
         .settings .row.stretch {
             justify-content: space-between;
         }
+        .hint {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-top: 6px;
+        }
         @media (max-width: 720px) {
             .controls {
                 flex-direction: column;
@@ -373,6 +378,16 @@
                     <div class="field">
                         <label for="autoDownloadMaxMb">Auto-download max size (MB)</label>
                         <input id="autoDownloadMaxMb" type="text" placeholder="50">
+                        <div class="hint">0 = unlimited. Leave empty to keep the current value.</div>
+                    </div>
+                    <div class="field">
+                        <label>Contact Resolution</label>
+                        <div class="row">
+                            <label style="display:flex; align-items:center; gap:8px;">
+                                <input id="autoSelectContact" type="checkbox">
+                                Auto-select best contact match (only when a single match exists)
+                            </label>
+                        </div>
                     </div>
                 </div>
                 <div class="row stretch" style="margin-top: 16px;">
@@ -556,7 +571,12 @@
                 document.getElementById('maxFilesPerUpload').value = data.max_files_per_upload ?? 1;
                 document.getElementById('uploadToken').value = data.upload_token || '';
                 document.getElementById('autoDownloadMedia').checked = Boolean(data.auto_download_media);
-                document.getElementById('autoDownloadMaxMb').value = data.auto_download_max_mb ?? 50;
+                if (data.auto_download_max_mb === undefined || data.auto_download_max_mb === null) {
+                    document.getElementById('autoDownloadMaxMb').value = '';
+                } else {
+                    document.getElementById('autoDownloadMaxMb').value = String(data.auto_download_max_mb);
+                }
+                document.getElementById('autoSelectContact').checked = Boolean(data.auto_select_contact);
             } catch (error) {
                 logMessage('Failed to load settings', 'error');
             }
@@ -575,8 +595,9 @@
                 const maxFilesPerUpload = Number(maxFilesPerUploadRaw);
                 const uploadToken = document.getElementById('uploadToken').value || '';
                 const autoDownloadMedia = document.getElementById('autoDownloadMedia').checked;
-                const autoDownloadMaxMbRaw = document.getElementById('autoDownloadMaxMb').value || '50';
-                const autoDownloadMaxMb = Number(autoDownloadMaxMbRaw);
+                const autoDownloadMaxMbRaw = document.getElementById('autoDownloadMaxMb').value.trim();
+                const autoDownloadMaxMb = autoDownloadMaxMbRaw === '' ? null : Number(autoDownloadMaxMbRaw);
+                const autoSelectContact = document.getElementById('autoSelectContact').checked;
                 await apiRequest('/api/settings', 'POST', {
                     media_public_base_url: mediaBaseUrl,
                     upload_max_mb: Number.isFinite(uploadMaxMb) ? uploadMaxMb : 50,
@@ -585,7 +606,8 @@
                     max_files_per_upload: Number.isFinite(maxFilesPerUpload) ? maxFilesPerUpload : 1,
                     upload_token: uploadToken,
                     auto_download_media: autoDownloadMedia,
-                    auto_download_max_mb: Number.isFinite(autoDownloadMaxMb) ? autoDownloadMaxMb : 50
+                    auto_download_max_mb: Number.isFinite(autoDownloadMaxMb) ? autoDownloadMaxMb : undefined,
+                    auto_select_contact: autoSelectContact
                 });
                 status.textContent = 'Saved';
                 logMessage('Settings updated', 'success');

@@ -94,6 +94,10 @@ export class StoreService {
     return this.messageStore ? this.messageStore.listMessagesAll(jid) : [];
   }
 
+  getMessageById(id: string): StoredMessage | null {
+    return this.messageStore ? this.messageStore.getMessageById(id) : null;
+  }
+
   deleteMessageById(id: string): void {
     this.messageStore?.deleteMessageById(id);
   }

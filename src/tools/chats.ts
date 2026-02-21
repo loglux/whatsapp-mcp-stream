@@ -9,6 +9,10 @@ export function registerChatTools(
   whatsappService: WhatsAppService,
 ): void {
   log.info("Registering chat tools...");
+  const isAutoSelectEnabled = () => {
+    const value = (process.env.AUTO_SELECT_CONTACT || "").toLowerCase();
+    return value === "true" || value === "1";
+  };
 
   server.tool(
     "list_chats",
@@ -240,11 +244,7 @@ export function registerChatTools(
         }
 
         const top = candidates[0];
-        const second = candidates[1];
-        const canAutoSelect =
-          top && (!second || top.score >= second.score + 10) && top.score >= 90;
-
-        if (!canAutoSelect && candidates.length > 1) {
+        if (candidates.length > 1 && !isAutoSelectEnabled()) {
           return {
             content: [
               {
@@ -253,6 +253,23 @@ export function registerChatTools(
               },
             ],
           };
+        }
+        if (candidates.length > 1) {
+          const second = candidates[1];
+          const canAutoSelect =
+            top &&
+            (!second || top.score >= second.score + 10) &&
+            top.score >= 90;
+          if (!canAutoSelect) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ matches: candidates }, null, 2),
+                },
+              ],
+            };
+          }
         }
 
         const chat = await whatsappService.getChatById(top.id);
