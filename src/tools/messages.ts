@@ -25,14 +25,96 @@ export function registerMessageTools(
         .optional()
         .default(50)
         .describe("Maximum number of messages to return"),
+      include_media: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Also fetch media payload/metadata for messages with media"),
+      include_full_data: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          "When include_media=true, include base64 media data in output",
+        ),
+      media_limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(5)
+        .describe("Max number of media messages to enrich per call"),
       // Filtering would need to be done after fetching.
     },
-    async ({ chat_id, limit }): Promise<CallToolResult> => {
+    async ({
+      chat_id,
+      limit,
+      include_media = false,
+      include_full_data = false,
+      media_limit = 5,
+    }): Promise<CallToolResult> => {
       try {
         const messages = await whatsappService.getMessages(chat_id, limit);
+        if (!include_media) {
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(messages, null, 2) },
+            ],
+          };
+        }
+
+        let remaining = media_limit;
+        const enriched = [];
+        for (const message of messages) {
+          if (!message.hasMedia) {
+            enriched.push(message);
+            continue;
+          }
+
+          if (remaining <= 0) {
+            enriched.push({
+              ...message,
+              media: { status: "skipped", reason: "media_limit_reached" },
+            });
+            continue;
+          }
+
+          remaining -= 1;
+          try {
+            const media = await whatsappService.downloadMedia(message.id);
+            if (!media) {
+              enriched.push({
+                ...message,
+                media: { status: "not_available" },
+              });
+              continue;
+            }
+            enriched.push({
+              ...message,
+              media: {
+                status: "ok",
+                mimetype: media.mimetype,
+                filename: media.filename || null,
+                filesize: media.filesize || media.data.length,
+                data: include_full_data
+                  ? media.data.toString("base64")
+                  : undefined,
+              },
+            });
+          } catch (error: any) {
+            enriched.push({
+              ...message,
+              media: {
+                status: "error",
+                error: error?.message || String(error),
+              },
+            });
+          }
+        }
+
         // Return the simplified message structure
         return {
-          content: [{ type: "text", text: JSON.stringify(messages, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(enriched, null, 2) }],
         };
       } catch (error: any) {
         log.error(`Error in list_messages tool for chat ${chat_id}:`, error);

@@ -533,7 +533,12 @@ export class WhatsAppService {
 
   private trackMessage(msg: any): void {
     const id = this.serializeMessageId(msg);
-    this.setBoundedMapEntry(this.messageIndex, id, msg, this.maxMessageIndexSize);
+    this.setBoundedMapEntry(
+      this.messageIndex,
+      id,
+      msg,
+      this.maxMessageIndexSize,
+    );
     const keyId = msg?.key?.id;
     if (keyId) {
       this.setBoundedMapEntry(
@@ -1360,7 +1365,8 @@ export class WhatsAppService {
         }
         const mapped = Array.from(merged.values()).filter(
           (chat) =>
-            includeSystemMessages || chat.lastMessage?.type !== "protocolMessage",
+            includeSystemMessages ||
+            chat.lastMessage?.type !== "protocolMessage",
         );
         mapped.sort((a, b) => b.timestamp - a.timestamp);
         return mapped.slice(0, limit);
@@ -1454,11 +1460,7 @@ export class WhatsAppService {
         const stored = this.storeService.getChatById(entry);
         if (!stored) continue;
         const canonicalId = this.resolveCanonicalChatId(stored.id);
-        const name = this.getBestChatName(
-          related,
-          canonicalId,
-          stored.name,
-        );
+        const name = this.getBestChatName(related, canonicalId, stored.name);
         const candidate: SimpleChat = {
           id: canonicalId,
           name: name || stored.name,
@@ -1500,8 +1502,7 @@ export class WhatsAppService {
 
   async getMessages(jid: string, limit = 50): Promise<SimpleMessage[]> {
     const related = this.getRelatedJids(jid);
-    const perLimit =
-      related.length > 1 ? Math.max(limit * 2, 100) : limit;
+    const perLimit = related.length > 1 ? Math.max(limit * 2, 100) : limit;
     const fromMemory = related.flatMap((entry) =>
       (this.messagesByChat.get(entry) || []).map((msg) =>
         mapMessage(msg, this.serializeMessageId.bind(this)),
@@ -1510,7 +1511,9 @@ export class WhatsAppService {
     const store = this.storeService;
     const fromDb = store
       ? related.flatMap((entry) =>
-          store.listMessages(entry, perLimit).map((msg) => mapStoredMessage(msg)),
+          store
+            .listMessages(entry, perLimit)
+            .map((msg) => mapStoredMessage(msg)),
         )
       : [];
 
