@@ -1992,4 +1992,345 @@ export class WhatsAppService {
       (best.timestamp || 0) >= (curr.timestamp || 0) ? best : curr,
     );
   }
+
+  private hasDirectChatForParticipant(jid: string): boolean {
+    if (!this.storeService || !jid) return false;
+    const related = this.getRelatedJids(jid);
+    for (const entry of related) {
+      const chat = this.storeService.getChatById(entry);
+      if (chat && !chat.is_group) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private isParticipantInContacts(jid: string): boolean {
+    if (!this.storeService || !jid) return false;
+    const related = this.getRelatedJids(jid);
+    for (const entry of related) {
+      const contact = this.storeService.getContactById(entry);
+      if (contact) return true;
+    }
+    return false;
+  }
+
+  private async getGroupParticipantJids(
+    groupJid: string,
+    refreshGroupInfo: boolean,
+  ): Promise<string[]> {
+    if (!groupJid) return [];
+
+    if (refreshGroupInfo) {
+      const info = await this.getGroupInfo(groupJid);
+      const participants = Array.isArray(info?.participants)
+        ? info.participants
+        : [];
+      return participants
+        .map((p: any) => String(p?.id || "").trim())
+        .filter(Boolean);
+    }
+
+    if (this.storeService) {
+      const cached = this.storeService.listGroupParticipants(groupJid);
+      if (cached.length > 0) {
+        return cached
+          .map((p) => String(p.participant_jid || "").trim())
+          .filter(Boolean);
+      }
+    }
+    return [];
+  }
+
+  private buildMemberDisplay(canonicalId: string): {
+    name: string | null;
+    pushname: string | null;
+    number: string | null;
+  } {
+    const summary = this.getContactSummary(canonicalId);
+    return {
+      name: summary?.name || null,
+      pushname: summary?.pushname || null,
+      number: summary?.number || this.normalizePnNumber(canonicalId) || null,
+    };
+  }
+
+  private async buildGroupAuditMatrix(
+    groupLimit = 200,
+    refreshGroupInfo = false,
+  ): Promise<{
+    groupsProcessed: number;
+    members: Array<{
+      canonicalId: string;
+      ids: string[];
+      name: string | null;
+      pushname: string | null;
+      number: string | null;
+      groupCount: number;
+      groups: Array<{ id: string; name: string }>;
+      hasDirectChat: boolean;
+      inContacts: boolean;
+    }>;
+  }> {
+    let groups: SimpleChat[] = [];
+    try {
+      groups = await this.listGroups(groupLimit, false);
+    } catch (error) {
+      log.warn(
+        { err: error, groupLimit, refreshGroupInfo },
+        "Group audit: failed to list groups",
+      );
+      return {
+        groupsProcessed: 0,
+        members: [],
+      };
+    }
+    const memberMap = new Map<
+      string,
+      {
+        canonicalId: string;
+        ids: Set<string>;
+        groups: Array<{ id: string; name: string }>;
+      }
+    >();
+
+    for (const group of groups) {
+      const groupId = String(group.id || "").trim();
+      if (!groupId.endsWith("@g.us")) continue;
+      let participants: string[] = [];
+      try {
+        participants = await this.getGroupParticipantJids(
+          groupId,
+          refreshGroupInfo,
+        );
+      } catch (error) {
+        log.warn(
+          { err: error, groupId, refreshGroupInfo },
+          "Group audit: failed to load participants",
+        );
+        continue;
+      }
+      for (const participantRaw of participants) {
+        const participant = this.normalizeJid(participantRaw);
+        if (!participant) continue;
+        const canonicalId = this.resolveCanonicalChatId(participant);
+        const existing = memberMap.get(canonicalId) || {
+          canonicalId,
+          ids: new Set<string>(),
+          groups: [],
+        };
+        existing.ids.add(participant);
+        if (!existing.groups.some((g) => g.id === groupId)) {
+          existing.groups.push({
+            id: groupId,
+            name: group.name || groupId,
+          });
+        }
+        memberMap.set(canonicalId, existing);
+      }
+    }
+
+    const members = Array.from(memberMap.values())
+      .map((entry) => {
+        const profile = this.buildMemberDisplay(entry.canonicalId);
+        return {
+          canonicalId: entry.canonicalId,
+          ids: Array.from(entry.ids.values()).sort(),
+          name: profile.name,
+          pushname: profile.pushname,
+          number: profile.number,
+          groupCount: entry.groups.length,
+          groups: entry.groups.sort((a, b) => a.name.localeCompare(b.name)),
+          hasDirectChat: this.hasDirectChatForParticipant(entry.canonicalId),
+          inContacts: this.isParticipantInContacts(entry.canonicalId),
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.groupCount - a.groupCount ||
+          String(a.name || "").localeCompare(String(b.name || "")),
+      );
+
+    return {
+      groupsProcessed: groups.length,
+      members,
+    };
+  }
+
+  async analyzeGroupOverlaps(
+    groupLimit = 200,
+    refreshGroupInfo = false,
+    minSharedGroups = 2,
+  ): Promise<{
+    groupsProcessed: number;
+    totalMembers: number;
+    overlaps: Array<{
+      canonicalId: string;
+      ids: string[];
+      name: string | null;
+      pushname: string | null;
+      number: string | null;
+      groupCount: number;
+      groups: Array<{ id: string; name: string }>;
+      hasDirectChat: boolean;
+      inContacts: boolean;
+    }>;
+  }> {
+    const matrix = await this.buildGroupAuditMatrix(
+      groupLimit,
+      refreshGroupInfo,
+    );
+    const threshold = Math.max(2, minSharedGroups);
+    const overlaps = matrix.members.filter((m) => m.groupCount >= threshold);
+    return {
+      groupsProcessed: matrix.groupsProcessed,
+      totalMembers: matrix.members.length,
+      overlaps,
+    };
+  }
+
+  async findMembersWithoutDirectChat(
+    groupLimit = 200,
+    refreshGroupInfo = false,
+    minSharedGroups = 1,
+  ): Promise<{
+    groupsProcessed: number;
+    totalMembers: number;
+    members: Array<{
+      canonicalId: string;
+      ids: string[];
+      name: string | null;
+      pushname: string | null;
+      number: string | null;
+      groupCount: number;
+      groups: Array<{ id: string; name: string }>;
+      hasDirectChat: boolean;
+      inContacts: boolean;
+    }>;
+  }> {
+    const matrix = await this.buildGroupAuditMatrix(
+      groupLimit,
+      refreshGroupInfo,
+    );
+    const threshold = Math.max(1, minSharedGroups);
+    const members = matrix.members.filter(
+      (m) => !m.hasDirectChat && m.groupCount >= threshold,
+    );
+    return {
+      groupsProcessed: matrix.groupsProcessed,
+      totalMembers: matrix.members.length,
+      members,
+    };
+  }
+
+  async findMembersNotInContacts(
+    groupLimit = 200,
+    refreshGroupInfo = false,
+    minSharedGroups = 1,
+  ): Promise<{
+    groupsProcessed: number;
+    totalMembers: number;
+    members: Array<{
+      canonicalId: string;
+      ids: string[];
+      name: string | null;
+      pushname: string | null;
+      number: string | null;
+      groupCount: number;
+      groups: Array<{ id: string; name: string }>;
+      hasDirectChat: boolean;
+      inContacts: boolean;
+    }>;
+  }> {
+    const matrix = await this.buildGroupAuditMatrix(
+      groupLimit,
+      refreshGroupInfo,
+    );
+    const threshold = Math.max(1, minSharedGroups);
+    const members = matrix.members.filter(
+      (m) => !m.inContacts && m.groupCount >= threshold,
+    );
+    return {
+      groupsProcessed: matrix.groupsProcessed,
+      totalMembers: matrix.members.length,
+      members,
+    };
+  }
+
+  async runGroupAudit(
+    groupLimit = 200,
+    refreshGroupInfo = false,
+    overlapMinSharedGroups = 2,
+    minSharedGroups = 1,
+  ): Promise<{
+    summary: {
+      groupsProcessed: number;
+      totalMembers: number;
+      overlapCount: number;
+      withoutDirectChatCount: number;
+      notInContactsCount: number;
+    };
+    overlaps: Array<{
+      canonicalId: string;
+      ids: string[];
+      name: string | null;
+      pushname: string | null;
+      number: string | null;
+      groupCount: number;
+      groups: Array<{ id: string; name: string }>;
+      hasDirectChat: boolean;
+      inContacts: boolean;
+    }>;
+    withoutDirectChat: Array<{
+      canonicalId: string;
+      ids: string[];
+      name: string | null;
+      pushname: string | null;
+      number: string | null;
+      groupCount: number;
+      groups: Array<{ id: string; name: string }>;
+      hasDirectChat: boolean;
+      inContacts: boolean;
+    }>;
+    notInContacts: Array<{
+      canonicalId: string;
+      ids: string[];
+      name: string | null;
+      pushname: string | null;
+      number: string | null;
+      groupCount: number;
+      groups: Array<{ id: string; name: string }>;
+      hasDirectChat: boolean;
+      inContacts: boolean;
+    }>;
+  }> {
+    const matrix = await this.buildGroupAuditMatrix(
+      groupLimit,
+      refreshGroupInfo,
+    );
+    const overlapThreshold = Math.max(2, overlapMinSharedGroups);
+    const baseThreshold = Math.max(1, minSharedGroups);
+    const overlaps = matrix.members.filter(
+      (m) => m.groupCount >= overlapThreshold,
+    );
+    const withoutDirectChat = matrix.members.filter(
+      (m) => !m.hasDirectChat && m.groupCount >= baseThreshold,
+    );
+    const notInContacts = matrix.members.filter(
+      (m) => !m.inContacts && m.groupCount >= baseThreshold,
+    );
+
+    return {
+      summary: {
+        groupsProcessed: matrix.groupsProcessed,
+        totalMembers: matrix.members.length,
+        overlapCount: overlaps.length,
+        withoutDirectChatCount: withoutDirectChat.length,
+        notInContactsCount: notInContacts.length,
+      },
+      overlaps,
+      withoutDirectChat,
+      notInContacts,
+    };
+  }
 }

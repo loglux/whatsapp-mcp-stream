@@ -304,6 +304,227 @@ export function registerChatTools(
     },
   );
 
+  server.tool(
+    "analyze_group_overlaps",
+    "Find members that appear across multiple groups and return overlap details.",
+    {
+      group_limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(200)
+        .describe("How many groups to scan"),
+      refresh_group_info: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Fetch live group metadata before analysis"),
+      min_shared_groups: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(2)
+        .describe("Only include members present in at least this many groups"),
+    },
+    async ({
+      group_limit,
+      refresh_group_info,
+      min_shared_groups,
+    }): Promise<CallToolResult> => {
+      try {
+        const result = await whatsappService.analyzeGroupOverlaps(
+          group_limit,
+          refresh_group_info,
+          min_shared_groups,
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error: any) {
+        log.error("Error in analyze_group_overlaps tool:", error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error analyzing group overlaps: ${error?.message || String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "find_members_without_direct_chat",
+    "Find group members that do not have a direct chat with you.",
+    {
+      group_limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(200)
+        .describe("How many groups to scan"),
+      refresh_group_info: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Fetch live group metadata before analysis"),
+      min_shared_groups: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(1)
+        .describe("Only include members present in at least this many groups"),
+    },
+    async ({
+      group_limit,
+      refresh_group_info,
+      min_shared_groups,
+    }): Promise<CallToolResult> => {
+      try {
+        const result = await whatsappService.findMembersWithoutDirectChat(
+          group_limit,
+          refresh_group_info,
+          min_shared_groups,
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error: any) {
+        log.error("Error in find_members_without_direct_chat tool:", error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error finding members without direct chat: ${error?.message || String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "find_members_not_in_contacts",
+    "Find group members that are not in your contacts.",
+    {
+      group_limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(200)
+        .describe("How many groups to scan"),
+      refresh_group_info: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Fetch live group metadata before analysis"),
+      min_shared_groups: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(1)
+        .describe("Only include members present in at least this many groups"),
+    },
+    async ({
+      group_limit,
+      refresh_group_info,
+      min_shared_groups,
+    }): Promise<CallToolResult> => {
+      try {
+        const result = await whatsappService.findMembersNotInContacts(
+          group_limit,
+          refresh_group_info,
+          min_shared_groups,
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error: any) {
+        log.error("Error in find_members_not_in_contacts tool:", error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error finding members not in contacts: ${error?.message || String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "run_group_audit",
+    "Run a combined group-membership audit (overlaps, no direct chat, not in contacts).",
+    {
+      group_limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(200)
+        .describe("How many groups to scan"),
+      refresh_group_info: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Fetch live group metadata before analysis"),
+      overlap_min_shared_groups: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(2)
+        .describe("Threshold for overlap list"),
+      min_shared_groups: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .default(1)
+        .describe("Threshold for no-direct-chat and not-in-contacts lists"),
+    },
+    async ({
+      group_limit,
+      refresh_group_info,
+      overlap_min_shared_groups,
+      min_shared_groups,
+    }): Promise<CallToolResult> => {
+      try {
+        const result = await whatsappService.runGroupAudit(
+          group_limit,
+          refresh_group_info,
+          overlap_min_shared_groups,
+          min_shared_groups,
+        );
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error: any) {
+        log.error("Error in run_group_audit tool:", error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error running group audit: ${error?.message || String(error)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
   // get_contact_chats can be expensive without a dedicated index.
   // A possible implementation would list all chats and filter by participants, but this is very inefficient.
   // We might omit this or provide a limited version based on known chats.

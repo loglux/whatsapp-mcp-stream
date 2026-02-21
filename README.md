@@ -136,6 +136,10 @@ MCP_BASE_URL=http://localhost:3003 npm run smoke:mcp
 | `list_groups` | List group chats only. |
 | `get_direct_chat_by_contact_number` | Resolve a direct chat JID by phone number. |
 | `get_chat_by_contact` | Resolve a contact by name or phone number and return chat metadata. |
+| `analyze_group_overlaps` | Find members that appear across multiple groups. |
+| `find_members_without_direct_chat` | Find group members with no direct chat. |
+| `find_members_not_in_contacts` | Find group members missing from contacts. |
+| `run_group_audit` | Run combined group audit as one routine operation. |
 
 ### Messages
 
