@@ -508,7 +508,13 @@ export class WhatsAppService {
   private getBestContactName(jid: string): string | null {
     const summary = this.getContactSummary(jid);
     if (!summary) return null;
-    return summary.name || summary.pushname || summary.number || null;
+    const candidates = [summary.name, summary.pushname, summary.number];
+    for (const candidate of candidates) {
+      if (this.isUsableDisplayName(candidate, jid)) {
+        return candidate!;
+      }
+    }
+    return null;
   }
 
   private getBestChatName(
@@ -516,13 +522,30 @@ export class WhatsAppService {
     canonicalId: string,
     storedName: string | null | undefined,
   ): string | null {
-    if (storedName && storedName !== canonicalId) return storedName;
+    if (this.isUsableDisplayName(storedName, canonicalId)) return storedName!;
     for (const jid of related) {
       const name = this.getBestContactName(jid);
       if (name) return name;
     }
     const fallback = this.getBestContactName(canonicalId);
-    return fallback || storedName || null;
+    if (fallback) return fallback;
+    if (this.isPnJid(canonicalId)) {
+      const pn = this.normalizePnNumber(canonicalId);
+      if (pn) return pn;
+    }
+    return this.isUsableDisplayName(storedName, canonicalId) ? storedName! : null;
+  }
+
+  private isUsableDisplayName(
+    value: string | null | undefined,
+    canonicalId?: string,
+  ): boolean {
+    if (!value) return false;
+    const trimmed = String(value).trim();
+    if (!trimmed) return false;
+    if (trimmed === canonicalId) return false;
+    if (this.isLidJid(trimmed)) return false;
+    return true;
   }
 
   private buildSimpleContact(
@@ -2173,12 +2196,13 @@ export class WhatsAppService {
 
   private getLastMessageForChat(jid: string): SimpleMessage | undefined {
     const candidates: SimpleMessage[] = [];
+    const canonicalId = this.resolveCanonicalChatId(jid);
     if (this.storeService) {
       const related = this.getRelatedJids(jid);
       for (const entry of related) {
         const stored = this.storeService.listMessages(entry, 1);
         if (stored.length > 0) {
-          candidates.push(mapStoredMessage(stored[0]));
+          candidates.push(this.normalizeSimpleMessageId(mapStoredMessage(stored[0]), canonicalId));
         }
       }
     }
@@ -2187,13 +2211,35 @@ export class WhatsAppService {
       const list = this.messagesByChat.get(entry) || [];
       const last = list[list.length - 1];
       if (last) {
-        candidates.push(mapMessage(last, this.serializeMessageId.bind(this)));
+        candidates.push(
+          this.normalizeSimpleMessageId(
+            mapMessage(last, this.serializeMessageId.bind(this)),
+            canonicalId,
+          ),
+        );
       }
     }
     if (candidates.length === 0) return undefined;
     return candidates.reduce((best, curr) =>
       (best.timestamp || 0) >= (curr.timestamp || 0) ? best : curr,
     );
+  }
+
+  private normalizeSimpleMessageId(
+    message: SimpleMessage,
+    canonicalChatId: string,
+  ): SimpleMessage {
+    if (!message?.id || !canonicalChatId) return message;
+    const idx = message.id.indexOf(":");
+    if (idx <= 0) return message;
+    const rawChatId = message.id.slice(0, idx);
+    if (rawChatId === canonicalChatId) return message;
+    if (this.resolveCanonicalChatId(rawChatId) !== canonicalChatId) return message;
+    return {
+      ...message,
+      id: `${canonicalChatId}:${message.id.slice(idx + 1)}`,
+      to: canonicalChatId,
+    };
   }
 
   private hasDirectChatForParticipant(jid: string): boolean {
