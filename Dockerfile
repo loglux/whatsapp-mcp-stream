@@ -3,13 +3,18 @@
 
 FROM node:20-bullseye-slim AS builder
 
-# Install system dependencies for building
-RUN apt-get update && apt-get install -y \
-    git \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies for building (with retry for flaky apt in CI)
+RUN set -e; \
+    for i in 1 2 3; do \
+      apt-get update && apt-get install -y --fix-missing \
+        git \
+        python3 \
+        make \
+        g++ \
+        && rm -rf /var/lib/apt/lists/* && break; \
+      echo "apt-get failed (attempt $i), retrying..." >&2; \
+      sleep 2; \
+    done
 
 WORKDIR /app
 
