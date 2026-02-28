@@ -203,8 +203,11 @@ export class WhatsAppMcpServer {
   public readonly server: McpServer;
   private readonly whatsapp: WhatsAppService;
   private sseTransports: { [sessionId: string]: SSEServerTransport } = {};
-  private httpTransports: {
-    [sessionId: string]: StreamableHTTPServerTransport;
+  private httpSessions: {
+    [sessionId: string]: {
+      server: McpServer;
+      transport: StreamableHTTPServerTransport;
+    };
   } = {};
   private httpRpcRequestMap = new Map<
     string,
@@ -220,44 +223,46 @@ export class WhatsAppMcpServer {
     this.browserProcessManager = new BrowserProcessManager();
     this.whatsapp = new WhatsAppService();
 
-    this.server = new McpServer(SERVER_INFO, {
-      // Define initial capabilities if needed
+    this.server = this.createMcpServer();
+  }
+
+  private createMcpServer(): McpServer {
+    const server = new McpServer(SERVER_INFO, {
       capabilities: {
-        // Example: Enable logging capability
         logging: {},
       },
       instructions: "This server provides tools to interact with WhatsApp.",
     });
 
-    this.registerTools();
+    this.registerTools(server);
+    return server;
   }
 
-  private registerTools() {
+  private registerTools(server: McpServer) {
     log.info("Registering MCP tools...");
-    // Call tool registration functions here
-    registerAuthTools(this.server, this.whatsapp);
-    registerContactTools(this.server, this.whatsapp);
-    registerChatTools(this.server, this.whatsapp);
-    registerMessageTools(this.server, this.whatsapp);
-    registerMediaTools(this.server, this.whatsapp);
+    registerAuthTools(server, this.whatsapp);
+    registerContactTools(server, this.whatsapp);
+    registerChatTools(server, this.whatsapp);
+    registerMessageTools(server, this.whatsapp);
+    registerMediaTools(server, this.whatsapp);
 
     // Remove example dummy tool if no longer needed, or keep for testing
     // this.server.tool('ping', async () => ({
     //   content: [{ type: 'text', text: 'pong' }],
     // }));
     // Let's keep ping for now for basic testing
-    this.server.tool("ping", async () => ({
+    server.tool("ping", async () => ({
       content: [{ type: "text", text: "pong" }],
     }));
 
-    this.overrideListToolsHandler();
+    this.overrideListToolsHandler(server);
 
     log.info("MCP tools registered.");
   }
 
-  private overrideListToolsHandler() {
-    this.server.server.setRequestHandler(ListToolsRequestSchema, () => {
-      const registeredTools = (this.server as any)._registeredTools || {};
+  private overrideListToolsHandler(server: McpServer) {
+    server.server.setRequestHandler(ListToolsRequestSchema, () => {
+      const registeredTools = (server as any)._registeredTools || {};
       return {
         tools: Object.entries(registeredTools)
           .filter(([, tool]: any) => tool?.enabled)
@@ -650,10 +655,12 @@ export class WhatsAppMcpServer {
         "Incoming MCP HTTP request",
       );
       let transport: StreamableHTTPServerTransport;
+      let server = this.server;
       let transportSource: "existing-session" | "new-initialize" = "existing-session";
 
-      if (sessionId && this.httpTransports[sessionId]) {
-        transport = this.httpTransports[sessionId];
+      if (sessionId && this.httpSessions[sessionId]) {
+        transport = this.httpSessions[sessionId].transport;
+        server = this.httpSessions[sessionId].server;
         log.info(
           {
             requestId,
@@ -661,7 +668,7 @@ export class WhatsAppMcpServer {
           },
           "Resolved MCP HTTP transport from existing session map",
         );
-      } else if (sessionId && !this.httpTransports[sessionId]) {
+      } else if (sessionId && !this.httpSessions[sessionId]) {
         res.status(400).json({
           jsonrpc: "2.0",
           error: {
@@ -673,11 +680,15 @@ export class WhatsAppMcpServer {
         return;
       } else if (!sessionId && isInitializeRequest(req.body)) {
         transportSource = "new-initialize";
+        server = this.createMcpServer();
         transport = new StreamableHTTPServerTransport({
           enableJsonResponse,
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId: string) => {
-            this.httpTransports[newSessionId] = transport;
+            this.httpSessions[newSessionId] = {
+              server,
+              transport,
+            };
             rememberRequestCorrelation(newSessionId);
             log.info(
               {
@@ -708,11 +719,11 @@ export class WhatsAppMcpServer {
               },
               "MCP HTTP transport closed",
             );
-            delete this.httpTransports[transport.sessionId];
+            delete this.httpSessions[transport.sessionId];
           }
         };
 
-        await this.server.connect(transport);
+        await server.connect(transport);
       } else {
         res.status(400).json({
           jsonrpc: "2.0",
@@ -844,6 +855,7 @@ export class WhatsAppMcpServer {
         {
           requestId,
           sessionId: transport.sessionId || sessionId || null,
+          serverType: server === this.server ? "shared-root" : "http-session",
           transportInstanceId: maybeWrappedTransport.__transportInstanceId,
         },
         "Dispatching MCP HTTP request to transport",
@@ -854,6 +866,7 @@ export class WhatsAppMcpServer {
         {
           requestId,
           sessionId: transport.sessionId || sessionId || null,
+          serverType: server === this.server ? "shared-root" : "http-session",
           transportInstanceId: maybeWrappedTransport.__transportInstanceId,
           durationMs: Date.now() - startedAt,
         },
@@ -866,11 +879,11 @@ export class WhatsAppMcpServer {
       res: Response,
     ): Promise<void> => {
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
-      if (!sessionId || !this.httpTransports[sessionId]) {
+      if (!sessionId || !this.httpSessions[sessionId]) {
         res.status(400).send("Invalid or missing session ID");
         return;
       }
-      const transport = this.httpTransports[sessionId];
+      const transport = this.httpSessions[sessionId].transport;
       await transport.handleRequest(req, res);
     };
 
