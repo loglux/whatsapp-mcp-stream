@@ -19,7 +19,10 @@ import {
   StoredMedia,
 } from "../storage/message-store.js";
 import { StoreService } from "../providers/store/store-service.js";
-import { BaileysClient } from "../providers/wa/baileys-client.js";
+import {
+  BaileysClient,
+  BaileysLogEvent,
+} from "../providers/wa/baileys-client.js";
 import { WhatsAppSync } from "./whatsapp-sync.js";
 
 import {
@@ -74,13 +77,36 @@ export class WhatsAppService {
   private readonly resyncReconnectDelayMs = Number(
     process.env.WA_RESYNC_RECONNECT_DELAY_MS || 15000,
   );
+  private syncRecoveryInProgress = false;
+  private syncRecoveryAttempts = 0;
+  private lastSyncFailureAt: number | null = null;
+  private lastRecoveryAt: number | null = null;
+  private lastRecoveryReason: string | null = null;
+  private readonly syncRecoveryCooldownMs = Math.max(
+    30000,
+    Number(process.env.WA_SYNC_RECOVERY_COOLDOWN_MS || 300000) || 300000,
+  );
+  private readonly syncRecoveryWindowMs = Math.max(
+    60000,
+    Number(process.env.WA_SYNC_RECOVERY_WINDOW_MS || 900000) || 900000,
+  );
+  private readonly syncSoftRecoveryLimit = Math.max(
+    1,
+    Number(process.env.WA_SYNC_SOFT_RECOVERY_LIMIT || 2) || 2,
+  );
+  private readonly readinessGraceMs = Math.max(
+    30000,
+    Number(process.env.WA_READINESS_GRACE_MS || 180000) || 180000,
+  );
 
   constructor() {
     const baseDir =
       process.env.SESSION_DIR ||
       path.join(process.cwd(), "whatsapp-sessions", "baileys");
     this.sessionDir = baseDir;
-    this.client = new BaileysClient(this.sessionDir);
+    this.client = new BaileysClient(this.sessionDir, (event) =>
+      this.handleBaileysLogEvent(event),
+    );
     this.initStoreService();
     this.sync = new WhatsAppSync(
       this.storeService,
@@ -171,6 +197,91 @@ export class WhatsAppService {
     const dbPath =
       process.env.DB_PATH || path.join(this.sessionDir, "store.sqlite");
     this.storeService = new StoreService(dbPath);
+  }
+
+  private handleBaileysLogEvent(event: BaileysLogEvent): void {
+    const message = String(event.message || "");
+    const payloadText =
+      event.payload && typeof event.payload === "object"
+        ? JSON.stringify(event.payload)
+        : "";
+    const combined = `${message} ${payloadText}`.toLowerCase();
+
+    if (
+      combined.includes("failed to sync state from version") ||
+      (combined.includes("failed to find key") &&
+        combined.includes("decode mutation"))
+    ) {
+      this.scheduleSyncRecovery(message);
+    }
+  }
+
+  private scheduleSyncRecovery(reason: string): void {
+    const now = Date.now();
+    if (
+      this.lastSyncFailureAt &&
+      now - this.lastSyncFailureAt > this.syncRecoveryWindowMs
+    ) {
+      this.syncRecoveryAttempts = 0;
+    }
+    this.lastSyncFailureAt = now;
+    this.syncRecoveryAttempts += 1;
+
+    if (this.syncRecoveryInProgress) {
+      log.warn(
+        { reason, attempts: this.syncRecoveryAttempts },
+        "App state recovery already in progress",
+      );
+      return;
+    }
+
+    if (this.lastRecoveryAt && now - this.lastRecoveryAt < this.syncRecoveryCooldownMs) {
+      log.warn(
+        {
+          reason,
+          attempts: this.syncRecoveryAttempts,
+          cooldownMs: this.syncRecoveryCooldownMs,
+        },
+        "App state recovery skipped due to cooldown",
+      );
+      return;
+    }
+
+    this.syncRecoveryInProgress = true;
+    this.lastRecoveryAt = now;
+    this.lastRecoveryReason = reason;
+
+    const strategy =
+      this.syncRecoveryAttempts <= this.syncSoftRecoveryLimit
+        ? "force-resync"
+        : "restart";
+
+    setTimeout(() => {
+      void (async () => {
+        try {
+          if (strategy === "force-resync") {
+            log.warn(
+              { reason, attempts: this.syncRecoveryAttempts },
+              "Detected corrupted WhatsApp app state; forcing resync",
+            );
+            await this.forceResync();
+          } else {
+            log.warn(
+              { reason, attempts: this.syncRecoveryAttempts },
+              "Detected repeated app state corruption; restarting WhatsApp client",
+            );
+            await this.restart();
+          }
+        } catch (error) {
+          log.error(
+            { err: error, reason, strategy, attempts: this.syncRecoveryAttempts },
+            "Automatic app state recovery failed",
+          );
+        } finally {
+          this.syncRecoveryInProgress = false;
+        }
+      })();
+    }, 0);
   }
 
   private normalizeJid(jid: string): string {
@@ -1174,6 +1285,90 @@ export class WhatsAppService {
     };
   }
 
+  getHealthStatus(): {
+    ok: boolean;
+    reason: string;
+    ready: boolean;
+    authenticated: boolean;
+    chatCount: number;
+    lastDisconnectAt: number | null;
+    lastRecoveryAt: number | null;
+    syncRecoveryInProgress: boolean;
+  } {
+    const now = Date.now();
+    const chatCount = this.getChatCount();
+    const recoveringRecently =
+      this.syncRecoveryInProgress ||
+      (this.lastRecoveryAt !== null &&
+        now - this.lastRecoveryAt <= this.readinessGraceMs);
+    const disconnectedRecently =
+      this.lastDisconnectAt !== null &&
+      now - this.lastDisconnectAt <= this.readinessGraceMs;
+
+    if (this.isReadyFlag) {
+      return {
+        ok: true,
+        reason: "ready",
+        ready: this.isReadyFlag,
+        authenticated: this.isAuthenticatedFlag,
+        chatCount,
+        lastDisconnectAt: this.lastDisconnectAt,
+        lastRecoveryAt: this.lastRecoveryAt,
+        syncRecoveryInProgress: this.syncRecoveryInProgress,
+      };
+    }
+
+    if (recoveringRecently) {
+      return {
+        ok: true,
+        reason: "recovering",
+        ready: this.isReadyFlag,
+        authenticated: this.isAuthenticatedFlag,
+        chatCount,
+        lastDisconnectAt: this.lastDisconnectAt,
+        lastRecoveryAt: this.lastRecoveryAt,
+        syncRecoveryInProgress: this.syncRecoveryInProgress,
+      };
+    }
+
+    if (!this.isAuthenticatedFlag && this.latestQrCode) {
+      return {
+        ok: true,
+        reason: "awaiting-qr",
+        ready: this.isReadyFlag,
+        authenticated: this.isAuthenticatedFlag,
+        chatCount,
+        lastDisconnectAt: this.lastDisconnectAt,
+        lastRecoveryAt: this.lastRecoveryAt,
+        syncRecoveryInProgress: this.syncRecoveryInProgress,
+      };
+    }
+
+    if (disconnectedRecently) {
+      return {
+        ok: true,
+        reason: "recent-disconnect",
+        ready: this.isReadyFlag,
+        authenticated: this.isAuthenticatedFlag,
+        chatCount,
+        lastDisconnectAt: this.lastDisconnectAt,
+        lastRecoveryAt: this.lastRecoveryAt,
+        syncRecoveryInProgress: this.syncRecoveryInProgress,
+      };
+    }
+
+    return {
+      ok: false,
+      reason: "not-ready",
+      ready: this.isReadyFlag,
+      authenticated: this.isAuthenticatedFlag,
+      chatCount,
+      lastDisconnectAt: this.lastDisconnectAt,
+      lastRecoveryAt: this.lastRecoveryAt,
+      syncRecoveryInProgress: this.syncRecoveryInProgress,
+    };
+  }
+
   private async withLifecycleLock<T>(fn: () => Promise<T>): Promise<T> {
     let release: () => void;
     const next = new Promise<void>((resolve) => {
@@ -1267,11 +1462,19 @@ export class WhatsAppService {
     sessionReplaced: boolean;
     lastDisconnectReason: string | null;
     lastDisconnectAt: number | null;
+    lastRecoveryReason: string | null;
+    lastRecoveryAt: number | null;
+    syncRecoveryAttempts: number;
+    syncRecoveryInProgress: boolean;
   } {
     return {
       sessionReplaced: this.sessionReplaced,
       lastDisconnectReason: this.lastDisconnectReason,
       lastDisconnectAt: this.lastDisconnectAt,
+      lastRecoveryReason: this.lastRecoveryReason,
+      lastRecoveryAt: this.lastRecoveryAt,
+      syncRecoveryAttempts: this.syncRecoveryAttempts,
+      syncRecoveryInProgress: this.syncRecoveryInProgress,
     };
   }
 

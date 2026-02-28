@@ -209,11 +209,44 @@ export function registerAdminRoutes(
         sessionReplaced: connectionInfo.sessionReplaced,
         lastDisconnectReason: connectionInfo.lastDisconnectReason,
         lastDisconnectAt: connectionInfo.lastDisconnectAt,
+        lastRecoveryReason: connectionInfo.lastRecoveryReason,
+        lastRecoveryAt: connectionInfo.lastRecoveryAt,
+        syncRecoveryAttempts: connectionInfo.syncRecoveryAttempts,
+        syncRecoveryInProgress: connectionInfo.syncRecoveryInProgress,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
       log.error("Error getting status:", error);
       res.status(500).json({ error: "Failed to get status" });
+    }
+  });
+
+  app.get("/healthz", (_req: Request, res: Response) => {
+    try {
+      const health = whatsapp.getHealthStatus();
+      const connectionInfo = whatsapp.getConnectionInfo();
+      const syncStats = whatsapp.getSyncStats();
+      const status = health.ok ? 200 : 503;
+      res.status(status).json({
+        ok: health.ok,
+        reason: health.reason,
+        ready: health.ready,
+        authenticated: health.authenticated,
+        chatCount: health.chatCount,
+        syncRecoveryInProgress: health.syncRecoveryInProgress,
+        lastDisconnectAt: health.lastDisconnectAt,
+        lastDisconnectReason: connectionInfo.lastDisconnectReason,
+        lastRecoveryAt: health.lastRecoveryAt,
+        lastRecoveryReason: connectionInfo.lastRecoveryReason,
+        syncRecoveryAttempts: connectionInfo.syncRecoveryAttempts,
+        lastHistorySyncAt: syncStats.lastHistorySyncAt,
+        lastChatsSyncAt: syncStats.lastChatsSyncAt,
+        lastMessagesSyncAt: syncStats.lastMessagesSyncAt,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      log.error("Error getting health status:", error);
+      res.status(500).json({ ok: false, reason: "health-check-failed" });
     }
   });
 

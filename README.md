@@ -165,6 +165,26 @@ MCP_BASE_URL=http://localhost:3003 npm run smoke:mcp
 | --- | --- |
 | `ping` | Health check tool. |
 
+## Recovery Notes
+
+This service contains an intentional recovery workaround for Baileys/WhatsApp session-state corruption.
+
+Why it exists:
+
+- In production we observed cases where the container stayed alive and MCP still answered, but the WhatsApp session was functionally broken.
+- The most common indicators were Baileys errors like `failed to find key ... to decode mutation` and `failed to sync state from version`.
+- In that state, a manual container restart often restored service.
+
+Current behavior:
+
+- On app-state corruption signals, the service first tries a soft recovery with `forceResync()`.
+- If the same class of failure repeats within a time window, it escalates to an internal WhatsApp client restart.
+- A dedicated `/healthz` endpoint reports `503` only when the service is genuinely stuck outside the allowed recovery window.
+- Docker health checks use `/healthz`, so the container is restarted only after in-process recovery has had a chance to work.
+
+This is a pragmatic workaround, not a protocol-level fix. It reduces operator intervention but does not replace upgrading or replacing Baileys when upstream behavior changes.
+This workaround may be removed after migrating to a newer Baileys implementation or after confirming that the underlying session-state corruption issue is resolved.
+
 ## License
 
 MIT
@@ -183,6 +203,10 @@ Environment variables:
 | `WA_EVENT_STREAM_PATH` | `/app/logs/wa-events.log` | File path for the event stream log. |
 | `WA_RESYNC_RECONNECT` | `1` | Enable reconnect safety net after force resync. |
 | `WA_RESYNC_RECONNECT_DELAY_MS` | `15000` | Delay before reconnect after force resync (ms). |
+| `WA_SYNC_RECOVERY_COOLDOWN_MS` | `300000` | Minimum delay between automatic app-state recoveries. |
+| `WA_SYNC_RECOVERY_WINDOW_MS` | `900000` | Time window used to count repeated app-state corruption failures. |
+| `WA_SYNC_SOFT_RECOVERY_LIMIT` | `2` | Number of soft recoveries before escalating to an internal restart. |
+| `WA_READINESS_GRACE_MS` | `180000` | Grace period during recovery/disconnect before `/healthz` turns unhealthy. |
 | `WA_MESSAGE_INDEX_MAX` | `20000` | Max in-memory entries for message index (`jid:id` -> raw message). |
 | `WA_MESSAGE_KEY_INDEX_MAX` | `20000` | Max in-memory entries for message key index (`id` -> raw message). |
 

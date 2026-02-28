@@ -46,11 +46,11 @@ services:
       # - ./:/app/.env:ro
     working_dir: /app
     healthcheck:
-      test: ["CMD", "node", "-e", "process.exit(0)"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:3001/healthz"]
       interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 10s
+      start_period: 30s
     command: node --no-deprecation dist/index.js --http
     user: mcpuser
 
