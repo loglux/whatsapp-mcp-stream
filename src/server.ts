@@ -64,6 +64,12 @@ const TOOL_EXECUTION_METADATA: Record<string, ExecutionMetadata> = {
     destructiveHint: true,
     openWorldHint: false,
   },
+  force_resync: {
+    readOnlyHint: false,
+    idempotentHint: false,
+    destructiveHint: true,
+    openWorldHint: false,
+  },
   search_contacts: {
     readOnlyHint: true,
     idempotentHint: true,
