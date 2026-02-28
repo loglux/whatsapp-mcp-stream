@@ -3,8 +3,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { Implementation } from '@modelcontextprotocol/sdk/types.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { isInitializeRequest, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import express, { Request, Response } from 'express'; // Import Request and Response
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import { WhatsAppService } from './services/whatsapp.js';
 import { log } from './utils/logger.js';
 import { BrowserProcessManager } from './utils/browser-process-manager.js';
@@ -20,6 +21,39 @@ import { registerAdminRoutes } from './http/admin.js';
 const SERVER_INFO: Implementation = {
   name: 'whatsapp-mcp-stream',
   version: '1.0.0', // Consider reading from package.json
+};
+
+type ExecutionMetadata = {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+};
+
+const TOOL_EXECUTION_METADATA: Record<string, ExecutionMetadata> = {
+  ping: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  send_message: {
+    readOnlyHint: false,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: true,
+  },
+  send_media: {
+    readOnlyHint: false,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: true,
+  },
+  logout: {
+    readOnlyHint: false,
+    idempotentHint: true,
+    destructiveHint: true,
+    openWorldHint: false,
+  },
 };
 
 export class WhatsAppMcpServer {
@@ -63,7 +97,39 @@ export class WhatsAppMcpServer {
       content: [{ type: 'text', text: 'pong' }],
     }));
 
+    this.overrideListToolsHandler();
+
     log.info('MCP tools registered.');
+  }
+
+  private overrideListToolsHandler() {
+    this.server.server.setRequestHandler(ListToolsRequestSchema, () => {
+      const registeredTools = (this.server as any)._registeredTools || {};
+      return {
+        tools: Object.entries(registeredTools)
+          .filter(([, tool]: any) => tool?.enabled)
+          .map(([name, tool]: [string, any]) => {
+            const execution = TOOL_EXECUTION_METADATA[name];
+            return {
+              name,
+              description: tool.description,
+              inputSchema: tool.inputSchema
+                ? zodToJsonSchema(tool.inputSchema, {
+                    strictUnions: true,
+                  })
+                : {
+                    type: 'object',
+                    properties: {},
+                  },
+              ...(execution
+                ? {
+                    annotations: execution,
+                  }
+                : {}),
+            };
+          }),
+      };
+    });
   }
 
   async start(transportType: 'stdio' | 'sse' | 'http' = 'stdio') {
