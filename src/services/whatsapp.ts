@@ -250,7 +250,10 @@ export class WhatsAppService {
       return;
     }
 
-    if (this.lastRecoveryAt && now - this.lastRecoveryAt < this.syncRecoveryCooldownMs) {
+    if (
+      this.lastRecoveryAt &&
+      now - this.lastRecoveryAt < this.syncRecoveryCooldownMs
+    ) {
       log.warn(
         {
           reason,
@@ -289,7 +292,12 @@ export class WhatsAppService {
           }
         } catch (error) {
           log.error(
-            { err: error, reason, strategy, attempts: this.syncRecoveryAttempts },
+            {
+              err: error,
+              reason,
+              strategy,
+              attempts: this.syncRecoveryAttempts,
+            },
             "Automatic app state recovery failed",
           );
         } finally {
@@ -548,7 +556,9 @@ export class WhatsAppService {
       const pn = this.normalizePnNumber(canonicalId);
       if (pn) return pn;
     }
-    return this.isUsableDisplayName(storedName, canonicalId) ? storedName! : null;
+    return this.isUsableDisplayName(storedName, canonicalId)
+      ? storedName!
+      : null;
   }
 
   private isUsableDisplayName(
@@ -2111,7 +2121,10 @@ export class WhatsAppService {
     const isGroup = normalized.endsWith("@g.us");
     const dedupKey = this.buildSendDedupKey(normalized, message);
     const idempotencyKey = options?.idempotencyKey?.trim() || null;
-    const requestFingerprint = this.buildRequestFingerprint(normalized, message);
+    const requestFingerprint = this.buildRequestFingerprint(
+      normalized,
+      message,
+    );
     if (idempotencyKey) {
       const stored = this.getStoredIdempotentResult(
         "send_message",
@@ -2120,7 +2133,11 @@ export class WhatsAppService {
       );
       if (stored) {
         log.warn(
-          { jid: normalized, idempotencyKey, messageId: stored.__originalMessageId },
+          {
+            jid: normalized,
+            idempotencyKey,
+            messageId: stored.__originalMessageId,
+          },
           "Returned stored idempotent WhatsApp send result",
         );
         return stored;
@@ -2519,7 +2536,12 @@ export class WhatsAppService {
       for (const entry of related) {
         const stored = this.storeService.listMessages(entry, 1);
         if (stored.length > 0) {
-          candidates.push(this.normalizeSimpleMessageId(mapStoredMessage(stored[0]), canonicalId));
+          candidates.push(
+            this.normalizeSimpleMessageId(
+              mapStoredMessage(stored[0]),
+              canonicalId,
+            ),
+          );
         }
       }
     }
@@ -2551,7 +2573,8 @@ export class WhatsAppService {
     if (idx <= 0) return message;
     const rawChatId = message.id.slice(0, idx);
     if (rawChatId === canonicalChatId) return message;
-    if (this.resolveCanonicalChatId(rawChatId) !== canonicalChatId) return message;
+    if (this.resolveCanonicalChatId(rawChatId) !== canonicalChatId)
+      return message;
     return {
       ...message,
       id: `${canonicalChatId}:${message.id.slice(idx + 1)}`,
