@@ -211,6 +211,13 @@ Environment variables:
 | `WA_IDEMPOTENCY_TTL_MS` | `86400000` | How long completed `send_message` idempotency records are retained in SQLite for safe retries. |
 | `WA_MESSAGE_INDEX_MAX` | `20000` | Max in-memory entries for message index (`jid:id` -> raw message). |
 | `WA_MESSAGE_KEY_INDEX_MAX` | `20000` | Max in-memory entries for message key index (`id` -> raw message). |
+| `MCP_HTTP_ENABLE_JSON_RESPONSE` | `1` | Use direct JSON responses for Streamable HTTP POST requests by default. Set to `0` to force the older SSE-style POST response handling. |
+
+Additional transport diagnostics:
+
+- `/mcp` POST requests now log request lifecycle events in `logs/mcp-whatsapp.log`
+- this includes request entry, transport dispatch, `transport.handleRequest` completion, and HTTP `finish` / `close`
+- use these logs to determine whether latency happens before the response leaves `whatsapp-mcp-stream` or after that on the gateway/client side
 
 ## Export
 

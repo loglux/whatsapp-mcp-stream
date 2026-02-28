@@ -30,6 +30,25 @@ type ExecutionMetadata = {
   openWorldHint?: boolean;
 };
 
+function parseBooleanEnv(
+  value: string | undefined,
+  defaultValue = false,
+): boolean {
+  if (!value) {
+    return defaultValue;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return defaultValue;
+}
+
 const TOOL_EXECUTION_METADATA: Record<string, ExecutionMetadata> = {
   ping: {
     readOnlyHint: true,
@@ -411,7 +430,18 @@ export class WhatsAppMcpServer {
   }
 
   private async startHttpTransport(port = 3001) {
-    log.info(`Starting MCP server with Streamable HTTP transport on port ${port}...`);
+    const enableJsonResponse = parseBooleanEnv(
+      process.env.MCP_HTTP_ENABLE_JSON_RESPONSE,
+      true,
+    );
+
+    log.info(
+      {
+        port,
+        enableJsonResponse,
+      },
+      'Starting MCP server with Streamable HTTP transport...',
+    );
     const app = express();
     app.use(express.json({ limit: '10mb' }));
 
@@ -419,8 +449,62 @@ export class WhatsAppMcpServer {
 
     // Handle POST requests for client-to-server communication
     app.post('/mcp', async (req: Request, res: Response) => {
+      const requestId = randomUUID();
+      const startedAt = Date.now();
+      const body = req.body;
+      const methodNames = Array.isArray(body)
+        ? body
+            .map((message: any) =>
+              typeof message?.method === 'string' ? message.method : null,
+            )
+            .filter(Boolean)
+        : [typeof body?.method === 'string' ? body.method : null].filter(Boolean);
+      const rpcIds = Array.isArray(body)
+        ? body.map((message: any) => message?.id ?? null)
+        : [body?.id ?? null];
+
+      res.on('finish', () => {
+        log.info(
+          {
+            requestId,
+            statusCode: res.statusCode,
+            durationMs: Date.now() - startedAt,
+            writableEnded: res.writableEnded,
+          },
+          'MCP HTTP response finished',
+        );
+      });
+
+      res.on('close', () => {
+        log.info(
+          {
+            requestId,
+            statusCode: res.statusCode,
+            durationMs: Date.now() - startedAt,
+            writableEnded: res.writableEnded,
+            destroyed: res.destroyed,
+          },
+          'MCP HTTP response closed',
+        );
+      });
+
       // Check for existing session ID
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      log.info(
+        {
+          requestId,
+          httpMethod: req.method,
+          path: req.path,
+          sessionId: sessionId || null,
+          accept: req.headers.accept || null,
+          contentType: req.headers['content-type'] || null,
+          rpcIds,
+          methodNames,
+          isInitialize: Boolean(body && isInitializeRequest(body)),
+          enableJsonResponse,
+        },
+        'Incoming MCP HTTP request',
+      );
       let transport: StreamableHTTPServerTransport;
 
       if (sessionId && this.httpTransports[sessionId]) {
@@ -437,14 +521,29 @@ export class WhatsAppMcpServer {
         return;
       } else if (!sessionId && isInitializeRequest(req.body)) {
         transport = new StreamableHTTPServerTransport({
+          enableJsonResponse,
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId: string) => {
             this.httpTransports[newSessionId] = transport;
+            log.info(
+              {
+                requestId,
+                sessionId: newSessionId,
+              },
+              'MCP HTTP session initialized',
+            );
           },
         });
 
         transport.onclose = () => {
           if (transport.sessionId) {
+            log.info(
+              {
+                requestId,
+                sessionId: transport.sessionId,
+              },
+              'MCP HTTP transport closed',
+            );
             delete this.httpTransports[transport.sessionId];
           }
         };
@@ -462,7 +561,22 @@ export class WhatsAppMcpServer {
         return;
       }
 
+      log.info(
+        {
+          requestId,
+          sessionId: transport.sessionId || sessionId || null,
+        },
+        'Dispatching MCP HTTP request to transport',
+      );
       await transport.handleRequest(req, res, req.body);
+      log.info(
+        {
+          requestId,
+          sessionId: transport.sessionId || sessionId || null,
+          durationMs: Date.now() - startedAt,
+        },
+        'transport.handleRequest resolved',
+      );
     });
 
     const handleSessionRequest = async (req: Request, res: Response): Promise<void> => {

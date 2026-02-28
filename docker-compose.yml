@@ -21,6 +21,7 @@ services:
 
       # Transport type: stdio, sse, or http (streamable HTTP)
       - TRANSPORT=http
+      - MCP_HTTP_ENABLE_JSON_RESPONSE=1
 
       # FFmpeg path (already installed in container)
       - FFMPEG_PATH=/usr/bin/ffmpeg
