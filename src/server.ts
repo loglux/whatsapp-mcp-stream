@@ -36,6 +36,16 @@ const TOOL_EXECUTION_METADATA: Record<string, ExecutionMetadata> = {
     idempotentHint: true,
     openWorldHint: false,
   },
+  get_qr_code: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  check_auth_status: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   send_message: {
     readOnlyHint: false,
     idempotentHint: true,
@@ -52,6 +62,111 @@ const TOOL_EXECUTION_METADATA: Record<string, ExecutionMetadata> = {
     readOnlyHint: false,
     idempotentHint: true,
     destructiveHint: true,
+    openWorldHint: false,
+  },
+  search_contacts: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  resolve_contact: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  get_contact_by_id: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_profile_pic: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  get_group_info: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  list_chats: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  list_system_chats: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  list_groups: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_chat_by_id: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_direct_chat_by_contact_number: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_chat_by_contact: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  analyze_group_overlaps: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  find_members_without_direct_chat: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  find_members_not_in_contacts: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  run_group_audit: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
+  list_messages: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_message_by_id: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  search_messages: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_message_context: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  get_last_interaction: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  download_media: {
+    readOnlyHint: true,
+    idempotentHint: true,
     openWorldHint: false,
   },
 };
