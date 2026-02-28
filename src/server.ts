@@ -1,26 +1,29 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { Implementation } from '@modelcontextprotocol/sdk/types.js';
-import { isInitializeRequest, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import express, { Request, Response } from 'express'; // Import Request and Response
-import { zodToJsonSchema } from 'zod-to-json-schema';
-import { WhatsAppService } from './services/whatsapp.js';
-import { log } from './utils/logger.js';
-import { BrowserProcessManager } from './utils/browser-process-manager.js';
-import { randomUUID } from 'node:crypto';
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { Implementation } from "@modelcontextprotocol/sdk/types.js";
+import {
+  isInitializeRequest,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import express, { Request, Response } from "express"; // Import Request and Response
+import { zodToJsonSchema } from "zod-to-json-schema";
+import { WhatsAppService } from "./services/whatsapp.js";
+import { log } from "./utils/logger.js";
+import { BrowserProcessManager } from "./utils/browser-process-manager.js";
+import { randomUUID } from "node:crypto";
 // Import tool registration functions
-import { registerContactTools } from './tools/contacts.js';
-import { registerChatTools } from './tools/chats.js';
-import { registerMessageTools } from './tools/messages.js';
-import { registerMediaTools } from './tools/media.js';
-import { registerAuthTools } from './tools/auth.js';
-import { registerAdminRoutes } from './http/admin.js';
+import { registerContactTools } from "./tools/contacts.js";
+import { registerChatTools } from "./tools/chats.js";
+import { registerMessageTools } from "./tools/messages.js";
+import { registerMediaTools } from "./tools/media.js";
+import { registerAuthTools } from "./tools/auth.js";
+import { registerAdminRoutes } from "./http/admin.js";
 
 const SERVER_INFO: Implementation = {
-  name: 'whatsapp-mcp-stream',
-  version: '1.0.0', // Consider reading from package.json
+  name: "whatsapp-mcp-stream",
+  version: "1.0.0", // Consider reading from package.json
 };
 
 type ExecutionMetadata = {
@@ -39,10 +42,10 @@ function parseBooleanEnv(
   }
 
   const normalized = value.trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+  if (["1", "true", "yes", "on"].includes(normalized)) {
     return true;
   }
-  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+  if (["0", "false", "no", "off"].includes(normalized)) {
     return false;
   }
 
@@ -200,7 +203,17 @@ export class WhatsAppMcpServer {
   public readonly server: McpServer;
   private readonly whatsapp: WhatsAppService;
   private sseTransports: { [sessionId: string]: SSEServerTransport } = {};
-  private httpTransports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
+  private httpTransports: {
+    [sessionId: string]: StreamableHTTPServerTransport;
+  } = {};
+  private httpRpcRequestMap = new Map<
+    string,
+    {
+      requestId: string;
+      startedAt: number;
+      methodNames: string[];
+    }
+  >();
   private browserProcessManager: BrowserProcessManager;
 
   constructor() {
@@ -213,14 +226,14 @@ export class WhatsAppMcpServer {
         // Example: Enable logging capability
         logging: {},
       },
-      instructions: 'This server provides tools to interact with WhatsApp.',
+      instructions: "This server provides tools to interact with WhatsApp.",
     });
 
     this.registerTools();
   }
 
   private registerTools() {
-    log.info('Registering MCP tools...');
+    log.info("Registering MCP tools...");
     // Call tool registration functions here
     registerAuthTools(this.server, this.whatsapp);
     registerContactTools(this.server, this.whatsapp);
@@ -233,13 +246,13 @@ export class WhatsAppMcpServer {
     //   content: [{ type: 'text', text: 'pong' }],
     // }));
     // Let's keep ping for now for basic testing
-    this.server.tool('ping', async () => ({
-      content: [{ type: 'text', text: 'pong' }],
+    this.server.tool("ping", async () => ({
+      content: [{ type: "text", text: "pong" }],
     }));
 
     this.overrideListToolsHandler();
 
-    log.info('MCP tools registered.');
+    log.info("MCP tools registered.");
   }
 
   private overrideListToolsHandler() {
@@ -258,7 +271,7 @@ export class WhatsAppMcpServer {
                     strictUnions: true,
                   })
                 : {
-                    type: 'object',
+                    type: "object",
                     properties: {},
                   },
               ...(execution
@@ -272,10 +285,10 @@ export class WhatsAppMcpServer {
     });
   }
 
-  async start(transportType: 'stdio' | 'sse' | 'http' = 'stdio') {
-    if (transportType === 'stdio') {
+  async start(transportType: "stdio" | "sse" | "http" = "stdio") {
+    if (transportType === "stdio") {
       await this.startStdioTransport();
-    } else if (transportType === 'sse') {
+    } else if (transportType === "sse") {
       await this.startSseTransport();
     } else {
       await this.startHttpTransport();
@@ -288,27 +301,28 @@ export class WhatsAppMcpServer {
       await this.browserProcessManager.cleanupOrphanedProcesses();
 
       // Initialize the WhatsApp client without blocking server startup
-      this.whatsapp.initialize()
+      this.whatsapp
+        .initialize()
         .then(() => {
-          log.info('WhatsApp client initialized successfully.');
+          log.info("WhatsApp client initialized successfully.");
         })
         .catch((error) => {
-          log.error({ err: error }, 'Failed to initialize WhatsApp client');
+          log.error({ err: error }, "Failed to initialize WhatsApp client");
         });
     } catch (error) {
-      log.error({ err: error }, 'Failed to initialize WhatsApp client');
+      log.error({ err: error }, "Failed to initialize WhatsApp client");
     }
   }
 
   private async startStdioTransport() {
-    log.info('Starting MCP server with stdio transport...');
+    log.info("Starting MCP server with stdio transport...");
     const stdioTransport = new StdioServerTransport();
     // Handle transport errors
     stdioTransport.onerror = (error) => {
-      log.error('StdioTransport Error:', error);
+      log.error("StdioTransport Error:", error);
     };
     await this.server.connect(stdioTransport);
-    log.info('MCP server connected via stdio.');
+    log.info("MCP server connected via stdio.");
   }
 
   /**
@@ -316,15 +330,15 @@ export class WhatsAppMcpServer {
    * @returns A promise that resolves when shutdown is complete
    */
   async shutdown(): Promise<void> {
-    log.info('Shutting down WhatsApp MCP Server...');
-    
+    log.info("Shutting down WhatsApp MCP Server...");
+
     try {
       // First destroy the WhatsApp client to properly close the Puppeteer browser
       // This will also unregister the browser PID
-      log.info('Destroying WhatsApp client...');
+      log.info("Destroying WhatsApp client...");
       await this.whatsapp.destroy();
-      log.info('WhatsApp client destroyed successfully');
-      
+      log.info("WhatsApp client destroyed successfully");
+
       // Close all SSE transports if any are active
       const sessionIds = Object.keys(this.sseTransports);
       if (sessionIds.length > 0) {
@@ -334,22 +348,28 @@ export class WhatsAppMcpServer {
             // Clean up the transport
             delete this.sseTransports[sessionId];
           } catch (error) {
-            log.warn({ err: error }, `Error closing SSE transport ${sessionId}`);
+            log.warn(
+              { err: error },
+              `Error closing SSE transport ${sessionId}`,
+            );
           }
         }
       }
-      
+
       // Final check for any orphaned processes that might have been missed
       try {
         await this.browserProcessManager.cleanupOrphanedProcesses();
       } catch (cleanupError) {
-        log.warn({ err: cleanupError }, 'Error during final browser process cleanup');
+        log.warn(
+          { err: cleanupError },
+          "Error during final browser process cleanup",
+        );
         // Continue with shutdown even if cleanup fails
       }
-      
-      log.info('Server shutdown completed successfully');
+
+      log.info("Server shutdown completed successfully");
     } catch (error) {
-      log.error({ err: error }, 'Error during server shutdown');
+      log.error({ err: error }, "Error during server shutdown");
       throw error;
     }
   }
@@ -357,24 +377,28 @@ export class WhatsAppMcpServer {
   private async startSseTransport(port = 3001) {
     log.info(`Starting MCP server with SSE transport on port ${port}...`);
     const app = express();
-    app.use(express.json({ limit: '10mb' }));
+    app.use(express.json({ limit: "10mb" }));
 
     this.registerAdminRoutes(app);
 
     // Endpoint for establishing SSE connection
-    app.get('/sse', async (_req: Request, res: Response) => { // Prefix req with _
-      log.info('SSE connection requested');
-      const transport = new SSEServerTransport('/messages', res);
+    app.get("/sse", async (_req: Request, res: Response) => {
+      // Prefix req with _
+      log.info("SSE connection requested");
+      const transport = new SSEServerTransport("/messages", res);
       this.sseTransports[transport.sessionId] = transport;
 
       // Handle transport errors
       transport.onerror = (error) => {
-        log.error({ err: error }, `SSE Transport Error (Session ${transport.sessionId})`);
+        log.error(
+          { err: error },
+          `SSE Transport Error (Session ${transport.sessionId})`,
+        );
         // Clean up transport on error
         delete this.sseTransports[transport.sessionId];
       };
 
-      res.on('close', () => {
+      res.on("close", () => {
         log.info(`SSE connection closed (Session ${transport.sessionId})`);
         delete this.sseTransports[transport.sessionId];
         // Optionally call transport.close() or server-side cleanup if needed
@@ -384,37 +408,50 @@ export class WhatsAppMcpServer {
         await this.server.connect(transport);
         log.info(`SSE transport connected (Session ${transport.sessionId})`);
       } catch (error) {
-        log.error({ err: error }, `Failed to connect SSE transport (Session ${transport.sessionId})`);
+        log.error(
+          { err: error },
+          `Failed to connect SSE transport (Session ${transport.sessionId})`,
+        );
         delete this.sseTransports[transport.sessionId];
         if (!res.headersSent) {
-          res.status(500).send('Failed to connect MCP server');
+          res.status(500).send("Failed to connect MCP server");
         }
       }
     });
 
     // Endpoint for receiving messages from the client via POST
-    app.post('/messages', express.json({ limit: '10mb' }), async (req: Request, res: Response) => { // Add types
-      const sessionId = req.query.sessionId as string;
-      const transport = this.sseTransports[sessionId];
+    app.post(
+      "/messages",
+      express.json({ limit: "10mb" }),
+      async (req: Request, res: Response) => {
+        // Add types
+        const sessionId = req.query.sessionId as string;
+        const transport = this.sseTransports[sessionId];
 
-      if (transport) {
-        log.debug(`Received POST message for session ${sessionId}`);
-        try {
-          // Pass raw body if needed, or parsed body
-          await transport.handlePostMessage(req, res, req.body);
-          // handlePostMessage sends the response (202 Accepted or error)
-        } catch (error) {
-          log.error({ err: error }, `Error handling POST message for session ${sessionId}`);
-          // Ensure response is sent if handlePostMessage failed before sending
-          if (!res.headersSent) {
-             res.status(500).send('Error processing message');
+        if (transport) {
+          log.debug(`Received POST message for session ${sessionId}`);
+          try {
+            // Pass raw body if needed, or parsed body
+            await transport.handlePostMessage(req, res, req.body);
+            // handlePostMessage sends the response (202 Accepted or error)
+          } catch (error) {
+            log.error(
+              { err: error },
+              `Error handling POST message for session ${sessionId}`,
+            );
+            // Ensure response is sent if handlePostMessage failed before sending
+            if (!res.headersSent) {
+              res.status(500).send("Error processing message");
+            }
           }
+        } else {
+          log.warn(`No active SSE transport found for sessionId: ${sessionId}`);
+          res
+            .status(400)
+            .send("No active SSE transport found for this session ID");
         }
-      } else {
-        log.warn(`No active SSE transport found for sessionId: ${sessionId}`);
-        res.status(400).send('No active SSE transport found for this session ID');
-      }
-    });
+      },
+    );
 
     return new Promise<void>((resolve, reject) => {
       const serverInstance = app.listen(port, () => {
@@ -422,8 +459,9 @@ export class WhatsAppMcpServer {
         resolve();
       });
 
-      serverInstance.on('error', (error: Error) => { // Add type
-        log.error('SSE server failed to start:', error);
+      serverInstance.on("error", (error: Error) => {
+        // Add type
+        log.error("SSE server failed to start:", error);
         reject(error);
       });
     });
@@ -440,30 +478,135 @@ export class WhatsAppMcpServer {
         port,
         enableJsonResponse,
       },
-      'Starting MCP server with Streamable HTTP transport...',
+      "Starting MCP server with Streamable HTTP transport...",
     );
     const app = express();
-    app.use(express.json({ limit: '10mb' }));
+    app.use(express.json({ limit: "10mb" }));
 
     this.registerAdminRoutes(app);
 
     // Handle POST requests for client-to-server communication
-    app.post('/mcp', async (req: Request, res: Response) => {
+    app.post("/mcp", async (req: Request, res: Response) => {
       const requestId = randomUUID();
       const startedAt = Date.now();
       const body = req.body;
       const methodNames = Array.isArray(body)
         ? body
             .map((message: any) =>
-              typeof message?.method === 'string' ? message.method : null,
+              typeof message?.method === "string" ? message.method : null,
             )
             .filter(Boolean)
-        : [typeof body?.method === 'string' ? body.method : null].filter(Boolean);
+        : [typeof body?.method === "string" ? body.method : null].filter(
+            Boolean,
+          );
       const rpcIds = Array.isArray(body)
         ? body.map((message: any) => message?.id ?? null)
         : [body?.id ?? null];
+      const requestKeys = new Set<string>();
 
-      res.on('finish', () => {
+      const getRpcRequestKey = (
+        activeSessionId: string | null,
+        rpcId: string | number | null,
+      ): string | null => {
+        if (activeSessionId == null || rpcId == null) {
+          return null;
+        }
+
+        return `${activeSessionId}:${String(rpcId)}`;
+      };
+
+      const rememberRequestCorrelation = (activeSessionId: string | null) => {
+        for (const rpcId of rpcIds) {
+          const key = getRpcRequestKey(activeSessionId, rpcId);
+          if (!key) {
+            continue;
+          }
+
+          this.httpRpcRequestMap.set(key, {
+            requestId,
+            startedAt,
+            methodNames: [...methodNames],
+          });
+          requestKeys.add(key);
+        }
+      };
+
+      const isSingleInitializeRequest =
+        rpcIds.length === 1 &&
+        methodNames.length === 1 &&
+        methodNames[0] === "initialize";
+
+      const forgetRequestCorrelation = () => {
+        for (const key of requestKeys) {
+          this.httpRpcRequestMap.delete(key);
+        }
+        requestKeys.clear();
+      };
+
+      const originalWriteHead = res.writeHead.bind(res);
+      const originalWrite = res.write.bind(res);
+      const originalEnd = res.end.bind(res);
+
+      res.writeHead = ((...args: any[]) => {
+        const [statusCode, maybeHeaders] = args;
+        log.info(
+          {
+            requestId,
+            statusCode,
+            headerKeys:
+              maybeHeaders && typeof maybeHeaders === "object"
+                ? Object.keys(maybeHeaders)
+                : [],
+            durationMs: Date.now() - startedAt,
+            writableEnded: res.writableEnded,
+          },
+          "MCP HTTP response writeHead called",
+        );
+        return (originalWriteHead as any)(...args);
+      }) as typeof res.writeHead;
+
+      res.write = ((chunk: any, ...args: any[]) => {
+        const byteLength =
+          typeof chunk === "string"
+            ? Buffer.byteLength(chunk)
+            : Buffer.isBuffer(chunk)
+              ? chunk.length
+              : null;
+        log.info(
+          {
+            requestId,
+            byteLength,
+            durationMs: Date.now() - startedAt,
+            writableEnded: res.writableEnded,
+          },
+          "MCP HTTP response write called",
+        );
+        return originalWrite(chunk, ...args);
+      }) as typeof res.write;
+
+      res.end = ((chunk?: any, ...args: any[]) => {
+        const byteLength =
+          typeof chunk === "string"
+            ? Buffer.byteLength(chunk)
+            : Buffer.isBuffer(chunk)
+              ? chunk.length
+              : chunk == null
+                ? 0
+                : null;
+        log.info(
+          {
+            requestId,
+            byteLength,
+            durationMs: Date.now() - startedAt,
+            writableEnded: res.writableEnded,
+          },
+          "MCP HTTP response end called",
+        );
+        return originalEnd(chunk, ...args);
+      }) as typeof res.end;
+
+      res.on("finish", () => {
+        forgetRequestCorrelation();
         log.info(
           {
             requestId,
@@ -471,11 +614,12 @@ export class WhatsAppMcpServer {
             durationMs: Date.now() - startedAt,
             writableEnded: res.writableEnded,
           },
-          'MCP HTTP response finished',
+          "MCP HTTP response finished",
         );
       });
 
-      res.on('close', () => {
+      res.on("close", () => {
+        forgetRequestCorrelation();
         log.info(
           {
             requestId,
@@ -484,12 +628,12 @@ export class WhatsAppMcpServer {
             writableEnded: res.writableEnded,
             destroyed: res.destroyed,
           },
-          'MCP HTTP response closed',
+          "MCP HTTP response closed",
         );
       });
 
       // Check for existing session ID
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
       log.info(
         {
           requestId,
@@ -497,13 +641,13 @@ export class WhatsAppMcpServer {
           path: req.path,
           sessionId: sessionId || null,
           accept: req.headers.accept || null,
-          contentType: req.headers['content-type'] || null,
+          contentType: req.headers["content-type"] || null,
           rpcIds,
           methodNames,
           isInitialize: Boolean(body && isInitializeRequest(body)),
           enableJsonResponse,
         },
-        'Incoming MCP HTTP request',
+        "Incoming MCP HTTP request",
       );
       let transport: StreamableHTTPServerTransport;
 
@@ -511,10 +655,10 @@ export class WhatsAppMcpServer {
         transport = this.httpTransports[sessionId];
       } else if (sessionId && !this.httpTransports[sessionId]) {
         res.status(400).json({
-          jsonrpc: '2.0',
+          jsonrpc: "2.0",
           error: {
             code: -32000,
-            message: 'Bad Request: Invalid session ID',
+            message: "Bad Request: Invalid session ID",
           },
           id: req.body?.id ?? null,
         });
@@ -525,12 +669,13 @@ export class WhatsAppMcpServer {
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId: string) => {
             this.httpTransports[newSessionId] = transport;
+            rememberRequestCorrelation(newSessionId);
             log.info(
               {
                 requestId,
                 sessionId: newSessionId,
               },
-              'MCP HTTP session initialized',
+              "MCP HTTP session initialized",
             );
           },
         });
@@ -542,7 +687,7 @@ export class WhatsAppMcpServer {
                 requestId,
                 sessionId: transport.sessionId,
               },
-              'MCP HTTP transport closed',
+              "MCP HTTP transport closed",
             );
             delete this.httpTransports[transport.sessionId];
           }
@@ -551,38 +696,139 @@ export class WhatsAppMcpServer {
         await this.server.connect(transport);
       } else {
         res.status(400).json({
-          jsonrpc: '2.0',
+          jsonrpc: "2.0",
           error: {
             code: -32000,
-            message: 'Bad Request: No valid session ID provided',
+            message: "Bad Request: No valid session ID provided",
           },
           id: null,
         });
         return;
       }
 
+      rememberRequestCorrelation(transport.sessionId || sessionId || null);
+
+      const maybeWrappedTransport =
+        transport as StreamableHTTPServerTransport & {
+          __responseLoggingWrapped?: boolean;
+          __currentRequestContext?: {
+            requestId: string;
+            startedAt: number;
+            methodNames: string[];
+            rpcIds: Array<string | number | null>;
+          } | null;
+          send: (
+            message: unknown,
+            options?: {
+              relatedRequestId?: string | number | null;
+            },
+          ) => Promise<void>;
+        };
+
+      if (!maybeWrappedTransport.__responseLoggingWrapped) {
+        const originalSend = maybeWrappedTransport.send.bind(
+          maybeWrappedTransport,
+        );
+        maybeWrappedTransport.send = async (message, options) => {
+          const relatedRequestId =
+            options?.relatedRequestId ?? (message as any)?.id ?? null;
+          const correlationKey = getRpcRequestKey(
+            maybeWrappedTransport.sessionId || null,
+            typeof relatedRequestId === "string" ||
+              typeof relatedRequestId === "number"
+              ? relatedRequestId
+              : null,
+          );
+          const correlatedRequest = correlationKey
+            ? this.httpRpcRequestMap.get(correlationKey)
+            : undefined;
+          const fallbackRequest =
+            !correlatedRequest &&
+            (maybeWrappedTransport.__currentRequestContext?.rpcIds.some(
+              (rpcId) => rpcId === relatedRequestId,
+            ) ||
+              (relatedRequestId == null &&
+                isSingleInitializeRequest &&
+                maybeWrappedTransport.__currentRequestContext != null))
+              ? maybeWrappedTransport.__currentRequestContext
+              : undefined;
+          const effectiveRequest = correlatedRequest || fallbackRequest;
+          const messageType = (message as any)?.method
+            ? "request-or-notification"
+            : (message as any)?.result !== undefined
+              ? "response"
+              : (message as any)?.error !== undefined
+                ? "error"
+                : "unknown";
+
+          log.info(
+            {
+              requestId: effectiveRequest?.requestId || null,
+              sessionId: maybeWrappedTransport.sessionId || null,
+              relatedRequestId,
+              messageType,
+              correlationFound: Boolean(effectiveRequest),
+              requestMethodNames: effectiveRequest?.methodNames || [],
+              durationMs: effectiveRequest
+                ? Date.now() - effectiveRequest.startedAt
+                : null,
+            },
+            "MCP transport.send called",
+          );
+
+          await originalSend(message, options);
+
+          log.info(
+            {
+              requestId: effectiveRequest?.requestId || null,
+              sessionId: maybeWrappedTransport.sessionId || null,
+              relatedRequestId,
+              messageType,
+              correlationFound: Boolean(effectiveRequest),
+              requestMethodNames: effectiveRequest?.methodNames || [],
+              durationMs: effectiveRequest
+                ? Date.now() - effectiveRequest.startedAt
+                : null,
+            },
+            "MCP transport.send resolved",
+          );
+        };
+        maybeWrappedTransport.__responseLoggingWrapped = true;
+      }
+
+      maybeWrappedTransport.__currentRequestContext = {
+        requestId,
+        startedAt,
+        methodNames: [...methodNames],
+        rpcIds: [...rpcIds],
+      };
+
       log.info(
         {
           requestId,
           sessionId: transport.sessionId || sessionId || null,
         },
-        'Dispatching MCP HTTP request to transport',
+        "Dispatching MCP HTTP request to transport",
       );
       await transport.handleRequest(req, res, req.body);
+      maybeWrappedTransport.__currentRequestContext = null;
       log.info(
         {
           requestId,
           sessionId: transport.sessionId || sessionId || null,
           durationMs: Date.now() - startedAt,
         },
-        'transport.handleRequest resolved',
+        "transport.handleRequest resolved",
       );
     });
 
-    const handleSessionRequest = async (req: Request, res: Response): Promise<void> => {
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    const handleSessionRequest = async (
+      req: Request,
+      res: Response,
+    ): Promise<void> => {
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
       if (!sessionId || !this.httpTransports[sessionId]) {
-        res.status(400).send('Invalid or missing session ID');
+        res.status(400).send("Invalid or missing session ID");
         return;
       }
       const transport = this.httpTransports[sessionId];
@@ -590,18 +836,20 @@ export class WhatsAppMcpServer {
     };
 
     // Handle GET requests for server-to-client notifications via SSE
-    app.get('/mcp', handleSessionRequest);
+    app.get("/mcp", handleSessionRequest);
     // Handle DELETE requests for session termination
-    app.delete('/mcp', handleSessionRequest);
+    app.delete("/mcp", handleSessionRequest);
 
     return new Promise<void>((resolve, reject) => {
       const serverInstance = app.listen(port, () => {
-        log.info(`Streamable HTTP server listening on http://localhost:${port}/mcp`);
+        log.info(
+          `Streamable HTTP server listening on http://localhost:${port}/mcp`,
+        );
         resolve();
       });
 
-      serverInstance.on('error', (error: Error) => {
-        log.error('Streamable HTTP server failed to start:', error);
+      serverInstance.on("error", (error: Error) => {
+        log.error("Streamable HTTP server failed to start:", error);
         reject(error);
       });
     });
