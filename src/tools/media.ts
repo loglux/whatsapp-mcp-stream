@@ -12,6 +12,7 @@ import { AudioUtils } from "../utils/audio.js";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import crypto from "crypto";
 import axios from "axios";
 import { fileTypeFromBuffer } from "file-type";
 
@@ -59,6 +60,14 @@ export function registerMediaTools(
         .describe(
           "Send audio specifically as a voice note (requires ffmpeg for conversion if not opus/ogg)",
         ),
+      idempotency_key: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe(
+          "Optional idempotency key. Repeating the same send_media request with the same key returns the original result instead of sending again.",
+        ),
       include_full_data: z
         .boolean()
         .optional()
@@ -74,6 +83,7 @@ export function registerMediaTools(
       filename,
       caption,
       as_audio_message,
+      idempotency_key,
       include_full_data = false,
     }): Promise<CallToolResult> => {
       let input: string | null = null;
@@ -114,6 +124,21 @@ export function registerMediaTools(
       }
 
       try {
+        const requestFingerprint = crypto
+          .createHash("sha256")
+          .update(
+            JSON.stringify({
+              recipient_jid,
+              media_path: media_path || null,
+              media_url: media_url || null,
+              media_content: media_content || null,
+              mime_type: mime_type || null,
+              filename: filename || null,
+              caption: caption || null,
+              as_audio_message,
+            }),
+          )
+          .digest("hex");
         let sentMessage: any;
         let finalMediaPath = media_path;
 
@@ -168,6 +193,10 @@ export function registerMediaTools(
             audioPath,
             caption,
             true,
+            {
+              idempotencyKey: idempotency_key,
+              requestFingerprint,
+            },
           );
 
           if (needsCleanup && tempFilePath && fs.existsSync(tempFilePath)) {
@@ -182,6 +211,10 @@ export function registerMediaTools(
               filename,
               caption,
               false,
+              {
+                idempotencyKey: idempotency_key,
+                requestFingerprint,
+              },
             );
           } else {
             sentMessage = await whatsappService.sendMedia(
@@ -189,6 +222,10 @@ export function registerMediaTools(
               input,
               caption,
               false,
+              {
+                idempotencyKey: idempotency_key,
+                requestFingerprint,
+              },
             );
             if (inputType === "path") {
               finalMediaPath = input;
@@ -207,6 +244,8 @@ export function registerMediaTools(
           messageId: messageId || "unknown",
           timestamp: Number(sentMessage?.messageTimestamp || Date.now() / 1000),
           filePathUsed: finalMediaPath,
+          deduplicated: Boolean(sentMessage?.__deduplicated),
+          idempotencyKey: idempotency_key || null,
         };
 
         if (include_full_data && inputType === "base64") {

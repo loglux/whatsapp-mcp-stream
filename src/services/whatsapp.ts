@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import axios from "axios";
 import { fileTypeFromBuffer } from "file-type";
 import { log } from "../utils/logger.js";
@@ -98,6 +99,19 @@ export class WhatsAppService {
     30000,
     Number(process.env.WA_READINESS_GRACE_MS || 180000) || 180000,
   );
+  private readonly sendDedupWindowMs = Math.max(
+    0,
+    Number(process.env.WA_SEND_DEDUP_WINDOW_MS || 45000) || 45000,
+  );
+  private readonly idempotencyTtlMs = Math.max(
+    60000,
+    Number(process.env.WA_IDEMPOTENCY_TTL_MS || 86400000) || 86400000,
+  );
+  private recentSendRequests = new Map<
+    string,
+    { timestamp: number; result: any; messageId: string | null }
+  >();
+  private inFlightSendRequests = new Map<string, Promise<any>>();
 
   constructor() {
     const baseDir =
@@ -108,6 +122,7 @@ export class WhatsAppService {
       this.handleBaileysLogEvent(event),
     );
     this.initStoreService();
+    this.storeService?.deleteExpiredIdempotencyRecords();
     this.sync = new WhatsAppSync(
       this.storeService,
       () => this.getSocketOptional(),
@@ -707,6 +722,204 @@ export class WhatsAppService {
       const oldestKey = map.keys().next().value;
       if (oldestKey === undefined) break;
       map.delete(oldestKey);
+    }
+  }
+
+  private buildSendDedupKey(jid: string, message: string): string {
+    return `${jid}\n${message}`;
+  }
+
+  private buildRequestFingerprint(jid: string, message: string): string {
+    return crypto
+      .createHash("sha256")
+      .update(this.buildSendDedupKey(jid, message))
+      .digest("hex");
+  }
+
+  private getRecentSendResult(jid: string, message: string): any | null {
+    if (!this.sendDedupWindowMs) return null;
+    const key = this.buildSendDedupKey(jid, message);
+    const existing = this.recentSendRequests.get(key);
+    if (!existing) return null;
+    if (Date.now() - existing.timestamp > this.sendDedupWindowMs) {
+      this.recentSendRequests.delete(key);
+      return null;
+    }
+    return {
+      ...(existing.result || {}),
+      __deduplicated: true,
+      __originalMessageId: existing.messageId,
+    };
+  }
+
+  private rememberSendResult(jid: string, message: string, result: any): void {
+    if (!this.sendDedupWindowMs) return;
+    const messageId =
+      result?.key?.remoteJid && result?.key?.id
+        ? `${result.key.remoteJid}:${result.key.id}`
+        : null;
+    const key = this.buildSendDedupKey(jid, message);
+    this.setBoundedMapEntry(
+      this.recentSendRequests,
+      key,
+      { timestamp: Date.now(), result, messageId },
+      500,
+    );
+  }
+
+  private markDeduplicatedResult(result: any, messageId?: string | null): any {
+    return {
+      ...(result || {}),
+      __deduplicated: true,
+      __originalMessageId:
+        messageId ||
+        (result?.key?.remoteJid && result?.key?.id
+          ? `${result.key.remoteJid}:${result.key.id}`
+          : null),
+    };
+  }
+
+  private getStoredIdempotentResult(
+    operation: string,
+    idempotencyKey: string,
+    requestFingerprint: string,
+  ): any | null {
+    if (!this.storeService) return null;
+    const existing = this.storeService.getIdempotencyRecord(idempotencyKey);
+    if (!existing) return null;
+    if (existing.expires_at <= Date.now()) {
+      return null;
+    }
+    if (existing.operation !== operation) {
+      throw new Error(
+        `idempotency_key was already used for ${existing.operation}, not ${operation}`,
+      );
+    }
+    if (existing.request_fingerprint !== requestFingerprint) {
+      throw new Error(
+        `idempotency_key was already used with different ${operation} parameters`,
+      );
+    }
+    try {
+      return this.markDeduplicatedResult(
+        JSON.parse(existing.response_json),
+        existing.message_id,
+      );
+    } catch (error) {
+      log.warn(
+        { err: error, idempotencyKey },
+        "Failed to parse stored idempotent send result",
+      );
+      return null;
+    }
+  }
+
+  private persistIdempotentResult(
+    operation: string,
+    idempotencyKey: string,
+    jid: string,
+    requestFingerprint: string,
+    result: any,
+  ): void {
+    if (!this.storeService) return;
+    const now = Date.now();
+    const messageId =
+      result?.key?.remoteJid && result?.key?.id
+        ? `${result.key.remoteJid}:${result.key.id}`
+        : null;
+    this.storeService.upsertIdempotencyRecord({
+      key: idempotencyKey,
+      operation,
+      scope_jid: jid,
+      request_fingerprint: requestFingerprint,
+      response_json: JSON.stringify(result || {}),
+      message_id: messageId,
+      created_at: now,
+      expires_at: now + this.idempotencyTtlMs,
+    });
+  }
+
+  async executeIdempotentOperation<T>(
+    operation: string,
+    requestFingerprint: string,
+    action: () => Promise<T>,
+    options?: { idempotencyKey?: string | null; scopeJid?: string | null },
+  ): Promise<T | any> {
+    const idempotencyKey = options?.idempotencyKey?.trim() || null;
+    if (!idempotencyKey) {
+      return await action();
+    }
+
+    const stored = this.getStoredIdempotentResult(
+      operation,
+      idempotencyKey,
+      requestFingerprint,
+    );
+    if (stored) {
+      log.warn(
+        {
+          operation,
+          idempotencyKey,
+          scopeJid: options?.scopeJid || null,
+          messageId: stored.__originalMessageId,
+        },
+        "Returned stored idempotent operation result",
+      );
+      return stored;
+    }
+
+    const inFlightKey = `idempotency:${operation}:${idempotencyKey}`;
+    const inFlight = this.inFlightSendRequests.get(inFlightKey);
+    if (inFlight) {
+      log.warn(
+        { operation, idempotencyKey, scopeJid: options?.scopeJid || null },
+        "Joined in-flight idempotent operation",
+      );
+      const result = await inFlight;
+      return this.markDeduplicatedResult(result);
+    }
+
+    const opPromise = Promise.resolve(action());
+    this.inFlightSendRequests.set(inFlightKey, opPromise);
+    try {
+      const result = await opPromise;
+      this.persistIdempotentResult(
+        operation,
+        idempotencyKey,
+        options?.scopeJid || "",
+        requestFingerprint,
+        result,
+      );
+      return result;
+    } finally {
+      this.inFlightSendRequests.delete(inFlightKey);
+    }
+  }
+
+  private async executeSendWithDedup(
+    key: string,
+    jid: string,
+    message: string,
+    operation: () => Promise<any>,
+  ): Promise<any> {
+    const inFlight = this.inFlightSendRequests.get(key);
+    if (inFlight) {
+      log.warn({ jid }, "Joined in-flight duplicate WhatsApp send request");
+      const result = await inFlight;
+      return this.markDeduplicatedResult(result);
+    }
+
+    const sendPromise = (async () => {
+      const result = await operation();
+      this.rememberSendResult(jid, message, result);
+      return result;
+    })();
+
+    this.inFlightSendRequests.set(key, sendPromise);
+    try {
+      return await sendPromise;
+    } finally {
+      this.inFlightSendRequests.delete(key);
     }
   }
 
@@ -1885,11 +2098,60 @@ export class WhatsAppService {
   }
 
   async sendMessage(jid: string, message: string): Promise<any> {
+    return this.sendMessageWithOptions(jid, message);
+  }
+
+  async sendMessageWithOptions(
+    jid: string,
+    message: string,
+    options?: { idempotencyKey?: string | null },
+  ): Promise<any> {
     const socket = this.getSocket();
     const normalized = this.resolveLookupJid(jid);
     const isGroup = normalized.endsWith("@g.us");
+    const dedupKey = this.buildSendDedupKey(normalized, message);
+    const idempotencyKey = options?.idempotencyKey?.trim() || null;
+    const requestFingerprint = this.buildRequestFingerprint(normalized, message);
+    if (idempotencyKey) {
+      const stored = this.getStoredIdempotentResult(
+        "send_message",
+        idempotencyKey,
+        requestFingerprint,
+      );
+      if (stored) {
+        log.warn(
+          { jid: normalized, idempotencyKey, messageId: stored.__originalMessageId },
+          "Returned stored idempotent WhatsApp send result",
+        );
+        return stored;
+      }
+    }
+    const duplicate = this.getRecentSendResult(normalized, message);
+    if (duplicate) {
+      log.warn(
+        { jid: normalized, messageId: duplicate.__originalMessageId },
+        "Suppressed duplicate WhatsApp send request",
+      );
+      return duplicate;
+    }
+    const operationKey = idempotencyKey || dedupKey;
     try {
-      return await socket.sendMessage(normalized, { text: message });
+      const result = await this.executeSendWithDedup(
+        operationKey,
+        normalized,
+        message,
+        () => socket.sendMessage(normalized, { text: message }),
+      );
+      if (idempotencyKey) {
+        this.persistIdempotentResult(
+          "send_message",
+          idempotencyKey,
+          normalized,
+          requestFingerprint,
+          result,
+        );
+      }
+      return result;
     } catch (error: any) {
       const msg = String(error?.message || error);
       const statusCode = error?.output?.statusCode;
@@ -1907,7 +2169,22 @@ export class WhatsAppService {
         }
         await new Promise((resolve) => setTimeout(resolve, 2000));
         try {
-          return await socket.sendMessage(normalized, { text: message });
+          const result = await this.executeSendWithDedup(
+            operationKey,
+            normalized,
+            message,
+            () => socket.sendMessage(normalized, { text: message }),
+          );
+          if (idempotencyKey) {
+            this.persistIdempotentResult(
+              "send_message",
+              idempotencyKey,
+              normalized,
+              requestFingerprint,
+              result,
+            );
+          }
+          return result;
         } catch (retryErr: any) {
           log.error(
             { err: retryErr, jid: normalized },
@@ -1930,6 +2207,7 @@ export class WhatsAppService {
     input: string,
     caption?: string,
     asAudioMessage = false,
+    options?: { idempotencyKey?: string | null; requestFingerprint?: string },
   ): Promise<any> {
     let buffer: Buffer;
     let mimetype = "application/octet-stream";
@@ -1960,7 +2238,26 @@ export class WhatsAppService {
       asAudioMessage,
     );
     const normalized = this.resolveLookupJid(jid);
-    return await this.getSocket().sendMessage(normalized, content);
+    const send = () => this.getSocket().sendMessage(normalized, content);
+    if (options?.idempotencyKey) {
+      return await this.executeIdempotentOperation(
+        "send_media",
+        options.requestFingerprint ||
+          this.buildRequestFingerprint(
+            normalized,
+            JSON.stringify({
+              input,
+              caption: caption || null,
+              asAudioMessage,
+              mimetype,
+              filename: filename || null,
+            }),
+          ),
+        send,
+        { idempotencyKey: options.idempotencyKey, scopeJid: normalized },
+      );
+    }
+    return await send();
   }
 
   async sendMediaFromBase64(
@@ -1970,6 +2267,7 @@ export class WhatsAppService {
     filename?: string,
     caption?: string,
     asAudioMessage = false,
+    options?: { idempotencyKey?: string | null; requestFingerprint?: string },
   ): Promise<any> {
     const buffer = Buffer.from(base64, "base64");
     const content = await this.buildMediaMessage(
@@ -1980,7 +2278,26 @@ export class WhatsAppService {
       asAudioMessage,
     );
     const normalized = this.resolveLookupJid(jid);
-    return await this.getSocket().sendMessage(normalized, content);
+    const send = () => this.getSocket().sendMessage(normalized, content);
+    if (options?.idempotencyKey) {
+      return await this.executeIdempotentOperation(
+        "send_media",
+        options.requestFingerprint ||
+          this.buildRequestFingerprint(
+            normalized,
+            JSON.stringify({
+              base64,
+              mimeType,
+              filename: filename || null,
+              caption: caption || null,
+              asAudioMessage,
+            }),
+          ),
+        send,
+        { idempotencyKey: options.idempotencyKey, scopeJid: normalized },
+      );
+    }
+    return await send();
   }
 
   async downloadMedia(messageId: string): Promise<DownloadedMedia | null> {

@@ -150,13 +150,13 @@ MCP_BASE_URL=http://localhost:3003 npm run smoke:mcp
 | `get_message_by_id` | Get a specific message by ID (`jid:id`). |
 | `get_message_context` | Get recent messages around a specific message. |
 | `get_last_interaction` | Get the most recent message for a JID. |
-| `send_message` | Send a text message to a person or group. |
+| `send_message` | Send a text message to a person or group. Supports optional `idempotency_key`. |
 
 ### Media
 
 | Tool | Description |
 | --- | --- |
-| `send_media` | Send media (image/video/document/audio). |
+| `send_media` | Send media (image/video/document/audio). Supports optional `idempotency_key`. |
 | `download_media` | Download media from a message. |
 
 ### Utility
@@ -207,6 +207,8 @@ Environment variables:
 | `WA_SYNC_RECOVERY_WINDOW_MS` | `900000` | Time window used to count repeated app-state corruption failures. |
 | `WA_SYNC_SOFT_RECOVERY_LIMIT` | `2` | Number of soft recoveries before escalating to an internal restart. |
 | `WA_READINESS_GRACE_MS` | `180000` | Grace period during recovery/disconnect before `/healthz` turns unhealthy. |
+| `WA_SEND_DEDUP_WINDOW_MS` | `45000` | Suppress exact duplicate `send_message` requests to the same JID within this window. |
+| `WA_IDEMPOTENCY_TTL_MS` | `86400000` | How long completed `send_message` idempotency records are retained in SQLite for safe retries. |
 | `WA_MESSAGE_INDEX_MAX` | `20000` | Max in-memory entries for message index (`jid:id` -> raw message). |
 | `WA_MESSAGE_KEY_INDEX_MAX` | `20000` | Max in-memory entries for message key index (`id` -> raw message). |
 

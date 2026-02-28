@@ -1,8 +1,10 @@
+import { z } from "zod";
 import { WhatsAppService } from "../services/whatsapp.js";
 import qrcode from "qrcode";
 import { log } from "../utils/logger.js";
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import crypto from "crypto";
 
 /**
  * Register authentication-related tools with the MCP server
@@ -36,9 +38,18 @@ export function registerAuthTools(
   server.tool(
     "logout",
     "Logout from WhatsApp and clear the current session",
-    {},
-    async (): Promise<CallToolResult> => {
-      return await logoutFromWhatsApp(whatsappService);
+    {
+      idempotency_key: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe(
+          "Optional idempotency key. Repeating the same logout request with the same key returns the original result instead of logging out again.",
+        ),
+    },
+    async ({ idempotency_key }): Promise<CallToolResult> => {
+      return await logoutFromWhatsApp(whatsappService, idempotency_key);
     },
   );
 
@@ -89,37 +100,50 @@ async function forceResync(
  */
 async function logoutFromWhatsApp(
   whatsappService: WhatsAppService,
+  idempotencyKey?: string,
 ): Promise<CallToolResult> {
   try {
-    if (!whatsappService.isAuthenticated()) {
-      log.info("Logout requested but client is not authenticated");
-      return {
-        content: [
-          {
-            type: "text",
-            text: "You are not currently authenticated with WhatsApp, so there is no need to logout.",
-          },
-        ],
-        isError: false,
-      };
-    }
+    return await whatsappService.executeIdempotentOperation(
+      "logout",
+      crypto
+        .createHash("sha256")
+        .update(
+          JSON.stringify({
+            authenticated: whatsappService.isAuthenticated(),
+          }),
+        )
+        .digest("hex"),
+      async () => {
+        if (!whatsappService.isAuthenticated()) {
+          log.info("Logout requested but client is not authenticated");
+          return {
+            content: [
+              {
+                type: "text",
+                text: "You are not currently authenticated with WhatsApp, so there is no need to logout.",
+              },
+            ],
+            isError: false,
+          } satisfies CallToolResult;
+        }
 
-    await whatsappService.logout();
+        await whatsappService.logout();
+        await whatsappService.initialize();
 
-    // After logout, we need to reinitialize to get a new QR code
-    await whatsappService.initialize();
+        log.info("Successfully logged out and reinitialized WhatsApp client");
 
-    log.info("Successfully logged out and reinitialized WhatsApp client");
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: "Successfully logged out of WhatsApp. You can now use the get_qr_code tool to authenticate with a new session.",
-        },
-      ],
-      isError: false,
-    };
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Successfully logged out of WhatsApp. You can now use the get_qr_code tool to authenticate with a new session.",
+            },
+          ],
+          isError: false,
+        } satisfies CallToolResult;
+      },
+      { idempotencyKey, scopeJid: "auth:logout" },
+    );
   } catch (error) {
     log.error("Error logging out from WhatsApp:", error);
     return {

@@ -342,12 +342,34 @@ export function registerMessageTools(
           "The recipient JID (e.g., 123456789@s.whatsapp.net or 123456789-12345678@g.us)",
         ),
       message: z.string().describe("The message text to send"),
+      idempotency_key: z
+        .string()
+        .min(1)
+        .max(200)
+        .optional()
+        .describe(
+          "Optional idempotency key. Repeating the same send request with the same key returns the original result instead of sending again.",
+        ),
     },
-    async ({ recipient_jid, message }): Promise<CallToolResult> => {
+    async ({
+      recipient_jid,
+      message,
+      idempotency_key,
+    }): Promise<CallToolResult> => {
       try {
-        const sentMessage = await whatsappService.sendMessage(
+        log.info(
+          {
+            recipient_jid,
+            bodyPreview: message.slice(0, 120),
+            messageLength: message.length,
+            hasIdempotencyKey: Boolean(idempotency_key),
+          },
+          "send_message tool invoked",
+        );
+        const sentMessage = await whatsappService.sendMessageWithOptions(
           recipient_jid,
           message,
+          { idempotencyKey: idempotency_key },
         );
         const messageId =
           sentMessage?.key?.remoteJid && sentMessage?.key?.id
@@ -359,7 +381,18 @@ export function registerMessageTools(
           message: "Message sent successfully.",
           messageId: messageId || "unknown",
           timestamp: Number(sentMessage?.messageTimestamp || Date.now() / 1000),
+          deduplicated: Boolean(sentMessage?.__deduplicated),
+          idempotencyKey: idempotency_key || null,
         };
+        log.info(
+          {
+            recipient_jid,
+            messageId: result.messageId,
+            deduplicated: result.deduplicated,
+            hasIdempotencyKey: Boolean(idempotency_key),
+          },
+          "send_message tool completed",
+        );
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         };

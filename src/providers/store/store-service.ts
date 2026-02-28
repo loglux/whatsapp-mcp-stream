@@ -4,6 +4,7 @@ import {
   StoredContact,
   StoredGroupMeta,
   StoredGroupParticipant,
+  StoredIdempotencyRecord,
   StoredMedia,
   StoredMessage,
 } from "../../storage/message-store.js";
@@ -112,6 +113,20 @@ export class StoreService {
 
   insertMessageReceipt(messageId: string, dataJson: string): void {
     this.messageStore?.insertMessageReceipt(messageId, dataJson);
+  }
+
+  getIdempotencyRecord(key: string): StoredIdempotencyRecord | null {
+    return this.messageStore ? this.messageStore.getIdempotencyRecord(key) : null;
+  }
+
+  upsertIdempotencyRecord(record: StoredIdempotencyRecord): void {
+    this.messageStore?.upsertIdempotencyRecord(record);
+  }
+
+  deleteExpiredIdempotencyRecords(now = Date.now()): number {
+    return this.messageStore
+      ? this.messageStore.deleteExpiredIdempotencyRecords(now)
+      : 0;
   }
 
   searchMessages(query: string, limit = 20): StoredMessage[] {

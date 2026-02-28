@@ -70,6 +70,17 @@ export interface StoredLidMapping {
   updated_at: number;
 }
 
+export interface StoredIdempotencyRecord {
+  key: string;
+  operation: string;
+  scope_jid: string | null;
+  request_fingerprint: string;
+  response_json: string;
+  message_id: string | null;
+  created_at: number;
+  expires_at: number;
+}
+
 export class MessageStore {
   private db: any;
 
@@ -163,6 +174,17 @@ export class MessageStore {
         created_at INTEGER
       );
 
+      CREATE TABLE IF NOT EXISTS idempotency_keys (
+        key TEXT PRIMARY KEY,
+        operation TEXT,
+        scope_jid TEXT,
+        request_fingerprint TEXT,
+        response_json TEXT,
+        message_id TEXT,
+        created_at INTEGER,
+        expires_at INTEGER
+      );
+
       CREATE INDEX IF NOT EXISTS idx_media_chat ON media(chat_jid);
 
       CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_jid, timestamp DESC);
@@ -174,6 +196,7 @@ export class MessageStore {
       CREATE INDEX IF NOT EXISTS idx_message_receipts_msg ON message_receipts(message_id);
       CREATE INDEX IF NOT EXISTS idx_lid_mappings_pn_jid ON lid_mappings(pn_jid);
       CREATE INDEX IF NOT EXISTS idx_lid_mappings_pn_number ON lid_mappings(pn_number);
+      CREATE INDEX IF NOT EXISTS idx_idempotency_expires_at ON idempotency_keys(expires_at);
     `;
     this.db.exec(sql);
   }
@@ -288,6 +311,40 @@ export class MessageStore {
        VALUES (?, ?, ?)`,
     );
     stmt.run(messageId, dataJson, Date.now());
+  }
+
+  getIdempotencyRecord(key: string): StoredIdempotencyRecord | null {
+    const stmt = this.db.prepare(
+      `SELECT key, operation, scope_jid, request_fingerprint, response_json, message_id, created_at, expires_at
+       FROM idempotency_keys
+       WHERE key = ?`,
+    );
+    return stmt.get(key) || null;
+  }
+
+  upsertIdempotencyRecord(record: StoredIdempotencyRecord): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO idempotency_keys
+       (key, operation, scope_jid, request_fingerprint, response_json, message_id, created_at, expires_at)
+       VALUES (@key, @operation, @scope_jid, @request_fingerprint, @response_json, @message_id, @created_at, @expires_at)
+       ON CONFLICT(key) DO UPDATE SET
+         operation=excluded.operation,
+         scope_jid=excluded.scope_jid,
+         request_fingerprint=excluded.request_fingerprint,
+         response_json=excluded.response_json,
+         message_id=excluded.message_id,
+         created_at=excluded.created_at,
+         expires_at=excluded.expires_at`,
+    );
+    stmt.run(record);
+  }
+
+  deleteExpiredIdempotencyRecords(now = Date.now()): number {
+    const stmt = this.db.prepare(
+      `DELETE FROM idempotency_keys WHERE expires_at <= ?`,
+    );
+    const info = stmt.run(now);
+    return info.changes as number;
   }
 
   searchMessages(query: string, limit = 20): StoredMessage[] {
