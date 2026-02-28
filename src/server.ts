@@ -650,9 +650,17 @@ export class WhatsAppMcpServer {
         "Incoming MCP HTTP request",
       );
       let transport: StreamableHTTPServerTransport;
+      let transportSource: "existing-session" | "new-initialize" = "existing-session";
 
       if (sessionId && this.httpTransports[sessionId]) {
         transport = this.httpTransports[sessionId];
+        log.info(
+          {
+            requestId,
+            requestedSessionId: sessionId,
+          },
+          "Resolved MCP HTTP transport from existing session map",
+        );
       } else if (sessionId && !this.httpTransports[sessionId]) {
         res.status(400).json({
           jsonrpc: "2.0",
@@ -664,6 +672,7 @@ export class WhatsAppMcpServer {
         });
         return;
       } else if (!sessionId && isInitializeRequest(req.body)) {
+        transportSource = "new-initialize";
         transport = new StreamableHTTPServerTransport({
           enableJsonResponse,
           sessionIdGenerator: () => randomUUID(),
@@ -674,6 +683,11 @@ export class WhatsAppMcpServer {
               {
                 requestId,
                 sessionId: newSessionId,
+                transportInstanceId: (
+                  transport as StreamableHTTPServerTransport & {
+                    __transportInstanceId?: string;
+                  }
+                ).__transportInstanceId,
               },
               "MCP HTTP session initialized",
             );
@@ -686,6 +700,11 @@ export class WhatsAppMcpServer {
               {
                 requestId,
                 sessionId: transport.sessionId,
+                transportInstanceId: (
+                  transport as StreamableHTTPServerTransport & {
+                    __transportInstanceId?: string;
+                  }
+                ).__transportInstanceId,
               },
               "MCP HTTP transport closed",
             );
@@ -710,6 +729,7 @@ export class WhatsAppMcpServer {
 
       const maybeWrappedTransport =
         transport as StreamableHTTPServerTransport & {
+          __transportInstanceId?: string;
           __responseLoggingWrapped?: boolean;
           __currentRequestContext?: {
             requestId: string;
@@ -724,6 +744,21 @@ export class WhatsAppMcpServer {
             },
           ) => Promise<void>;
         };
+
+      if (!maybeWrappedTransport.__transportInstanceId) {
+        maybeWrappedTransport.__transportInstanceId = randomUUID();
+      }
+
+      log.info(
+        {
+          requestId,
+          requestedSessionId: sessionId || null,
+          resolvedSessionId: transport.sessionId || null,
+          transportSource,
+          transportInstanceId: maybeWrappedTransport.__transportInstanceId,
+        },
+        "Selected MCP HTTP transport",
+      );
 
       if (!maybeWrappedTransport.__responseLoggingWrapped) {
         const originalSend = maybeWrappedTransport.send.bind(
@@ -765,6 +800,7 @@ export class WhatsAppMcpServer {
             {
               requestId: effectiveRequest?.requestId || null,
               sessionId: maybeWrappedTransport.sessionId || null,
+              transportInstanceId: maybeWrappedTransport.__transportInstanceId,
               relatedRequestId,
               messageType,
               correlationFound: Boolean(effectiveRequest),
@@ -782,6 +818,7 @@ export class WhatsAppMcpServer {
             {
               requestId: effectiveRequest?.requestId || null,
               sessionId: maybeWrappedTransport.sessionId || null,
+              transportInstanceId: maybeWrappedTransport.__transportInstanceId,
               relatedRequestId,
               messageType,
               correlationFound: Boolean(effectiveRequest),
@@ -807,6 +844,7 @@ export class WhatsAppMcpServer {
         {
           requestId,
           sessionId: transport.sessionId || sessionId || null,
+          transportInstanceId: maybeWrappedTransport.__transportInstanceId,
         },
         "Dispatching MCP HTTP request to transport",
       );
@@ -816,6 +854,7 @@ export class WhatsAppMcpServer {
         {
           requestId,
           sessionId: transport.sessionId || sessionId || null,
+          transportInstanceId: maybeWrappedTransport.__transportInstanceId,
           durationMs: Date.now() - startedAt,
         },
         "transport.handleRequest resolved",

@@ -47,7 +47,13 @@ services:
       # - ./:/app/.env:ro
     working_dir: /app
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:3001/healthz"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3001/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
       interval: 30s
       timeout: 3s
       retries: 3
