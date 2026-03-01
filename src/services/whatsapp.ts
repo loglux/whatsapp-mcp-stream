@@ -1039,463 +1039,464 @@ export class WhatsAppService {
     };
   }
 
-  async initialize(): Promise<void> {
-    await this.withLifecycleLock(async () => {
-      if (this.initializing) {
-        log.info(
-          "Initialize requested while another initialize is already running",
-        );
-        await this.initializing;
-        return;
-      }
+  private async initializeWithinLifecycleLock(): Promise<void> {
+    if (this.initializing) {
+      log.info(
+        "Initialize requested while another initialize is already running",
+      );
+      await this.initializing;
+      return;
+    }
 
-      this.initStoreService();
+    this.initStoreService();
 
-      this.initializing = (async () => {
-        log.info("Initializing WhatsApp client");
-        await this.client.initialize(async (key: any) => {
-          const cached = key?.id ? this.messageKeyIndex.get(key.id) : undefined;
-          return cached?.message;
-        });
-
-        const sock = this.client.getSocket();
-        log.info("WhatsApp client initialized; wiring socket events");
-        log.info(
-          {
-            eventLogEnabled: this.eventLogEnabled,
-            eventStreamEnabled: this.eventStreamEnabled,
-            eventStreamPath: this.eventStreamPath,
-          },
-          "WhatsApp event debug config",
-        );
-
-        if (this.eventLogEnabled || this.eventStreamEnabled) {
-          if (this.eventStreamEnabled) {
-            try {
-              fs.writeFileSync(this.eventStreamPath, "", { flag: "a" });
-            } catch (err) {
-              log.warn({ err }, "Failed to touch WhatsApp event stream file");
-            }
-          }
-          const originalEmit = sock.ev.emit.bind(sock.ev);
-          sock.ev.emit = ((event: string, ...args: any[]) => {
-            if (this.eventStreamEnabled) {
-              this.writeEventStream(event, args);
-            }
-            if (this.eventLogEnabled) {
-              const summary = this.summarizeEventPayload(event, args);
-              log.info({ event, ...summary }, "WhatsApp event (raw)");
-            }
-            return originalEmit(event, ...args);
-          }) as typeof sock.ev.emit;
-        }
-
-        if (this.eventStreamEnabled) {
-          try {
-            this.eventStreamWriter = fs.createWriteStream(
-              this.eventStreamPath,
-              { flags: "a" },
-            );
-            log.info(
-              { path: this.eventStreamPath },
-              "WhatsApp event stream capture enabled",
-            );
-          } catch (err) {
-            log.warn({ err }, "Failed to enable WhatsApp event stream capture");
-          }
-        }
-
-        sock.ev.on("connection.update", (update: any) => {
-          const { connection, lastDisconnect, qr } = update;
-
-          if (connection) {
-            log.info({ connection }, "WhatsApp connection update");
-          }
-          this.logEvent("connection.update", {
-            connection,
-            hasQr: Boolean(qr),
-            isOnline: update?.isOnline,
-            receivedPendingNotifications: update?.receivedPendingNotifications,
-            statusCode: lastDisconnect?.error?.output?.statusCode,
-            reason: lastDisconnect?.error?.message,
-          });
-
-          if (qr) {
-            this.latestQrCode = qr;
-            log.info("QR code received.");
-          }
-
-          if (connection === "open") {
-            this.isAuthenticatedFlag = true;
-            this.isReadyFlag = true;
-            this.latestQrCode = null;
-            this.sessionReplaced = false;
-            this.lastDisconnectReason = null;
-            this.lastDisconnectAt = null;
-            this.reconnectAttempts = 0;
-            this.clearDisconnectRecoveryTimer();
-            this.disconnectRecoveryInProgress = false;
-            log.info("WhatsApp connection opened.");
-            this.sync.scheduleWarmup(() => this.forceResync());
-          }
-
-          if (connection === "close") {
-            this.isReadyFlag = false;
-            this.isAuthenticatedFlag = false;
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const reason = lastDisconnect?.error?.message;
-            const reasonText = reason ? String(reason) : "";
-            this.lastDisconnectReason =
-              reasonText ||
-              (typeof statusCode === "number" ? String(statusCode) : null);
-            this.lastDisconnectAt = Date.now();
-            if (
-              statusCode === DisconnectReason.connectionReplaced ||
-              reasonText.toLowerCase().includes("conflict") ||
-              reasonText.toLowerCase().includes("replaced")
-            ) {
-              this.sessionReplaced = true;
-            }
-            log.warn({ statusCode, reason }, "WhatsApp connection closed.");
-            this.scheduleDisconnectRecovery(statusCode, reasonText);
-            if (statusCode === DisconnectReason.loggedOut) {
-              log.warn("WhatsApp logged out. Clearing session.");
-              try {
-                fs.rmSync(this.sessionDir, { recursive: true, force: true });
-              } catch (_error) {
-                // Ignore
-              }
-              this.reconnect().catch((err) =>
-                log.error({ err }, "Failed to reconnect WhatsApp"),
-              );
-            } else if (
-              statusCode === 401 ||
-              reason?.includes("Connection Failure")
-            ) {
-              log.warn(
-                "WhatsApp connection failed. Resetting session and reconnecting.",
-              );
-              try {
-                fs.rmSync(this.sessionDir, { recursive: true, force: true });
-              } catch (_error) {
-                // Ignore
-              }
-              this.reconnect().catch((err) =>
-                log.error({ err }, "Failed to reconnect WhatsApp"),
-              );
-            } else {
-              this.reconnect().catch((err) =>
-                log.error({ err }, "Failed to reconnect WhatsApp"),
-              );
-            }
-          }
-        });
-
-        sock.ev.on("messages.upsert", (ev: any) => {
-          this.logEvent("messages.upsert", {
-            type: ev?.type,
-            count: Array.isArray(ev?.messages) ? ev.messages.length : 0,
-            jids: Array.isArray(ev?.messages)
-              ? ev.messages.map((m: any) => m?.key?.remoteJid).filter(Boolean)
-              : [],
-            ids: Array.isArray(ev?.messages)
-              ? ev.messages.map((m: any) => m?.key?.id).filter(Boolean)
-              : [],
-          });
-          if (!ev?.messages) return;
-          for (const msg of ev.messages) {
-            this.trackMessage(msg);
-            this.upsertStoredMessage(msg);
-            const jid = msg?.key?.remoteJid;
-            if (jid) {
-              this.upsertStoredChat({
-                id: jid,
-                conversationTimestamp: msg?.messageTimestamp,
-              });
-            }
-            void this.maybeAutoDownloadMedia(msg);
-          }
-        });
-
-        sock.ev.on("messages.update", (updates: any[]) => {
-          this.logEvent("messages.update", {
-            count: Array.isArray(updates) ? updates.length : 0,
-          });
-          if (!updates) return;
-          for (const update of updates) {
-            const key =
-              update?.key?.remoteJid && update?.key?.id
-                ? `${update.key.remoteJid}:${update.key.id}`
-                : null;
-            if (key && this.messageIndex.has(key)) {
-              const existing = this.messageIndex.get(key);
-              const merged = {
-                ...existing,
-                ...update.update,
-                message: {
-                  ...(existing.message || {}),
-                  ...(update.update?.message || {}),
-                },
-              };
-              this.setBoundedMapEntry(
-                this.messageIndex,
-                key,
-                merged,
-                this.maxMessageIndexSize,
-              );
-              if (update.update?.message) {
-                this.updateStoredMessageContent(merged);
-              }
-            } else if (update?.update?.message && update?.key?.remoteJid) {
-              const synthetic = {
-                key: update.key,
-                message: update.update.message,
-                messageTimestamp:
-                  update.update?.messageTimestamp ??
-                  update.update?.timestamp ??
-                  0,
-              };
-              this.updateStoredMessageContent(synthetic);
-            }
-          }
-        });
-
-        sock.ev.on("messages.media-update", (updates: any[]) => {
-          this.logEvent("messages.media-update", {
-            count: Array.isArray(updates) ? updates.length : 0,
-          });
-          if (!updates) return;
-          for (const update of updates) {
-            const key = update?.key;
-            const msgId = this.serializeKeyId(key);
-            if (this.messageIndex.has(msgId)) {
-              const existing = this.messageIndex.get(msgId);
-              const merged = {
-                ...existing,
-                media: {
-                  ...(existing.media || {}),
-                  ...(update.media || {}),
-                },
-              };
-              this.setBoundedMapEntry(
-                this.messageIndex,
-                msgId,
-                merged,
-                this.maxMessageIndexSize,
-              );
-            }
-          }
-        });
-
-        sock.ev.on("messages.reaction", (updates: any[]) => {
-          this.logEvent("messages.reaction", {
-            count: Array.isArray(updates) ? updates.length : 0,
-          });
-          if (!updates) return;
-          for (const update of updates) {
-            const key = update?.key;
-            const msgId = this.serializeKeyId(key);
-            if (this.messageIndex.has(msgId)) {
-              const existing = this.messageIndex.get(msgId);
-              const reaction = update?.reaction;
-              const merged = {
-                ...existing,
-                reactions: reaction
-                  ? [...(existing.reactions || []), reaction]
-                  : existing.reactions,
-              };
-              this.setBoundedMapEntry(
-                this.messageIndex,
-                msgId,
-                merged,
-                this.maxMessageIndexSize,
-              );
-            }
-            if (this.storeService) {
-              try {
-                this.storeService.insertMessageReaction(
-                  msgId,
-                  JSON.stringify(update),
-                );
-              } catch (error) {
-                log.warn({ err: error }, "Failed to persist message reaction");
-              }
-            }
-          }
-        });
-
-        sock.ev.on("message-receipt.update", (updates: any[]) => {
-          this.logEvent("message-receipt.update", {
-            count: Array.isArray(updates) ? updates.length : 0,
-          });
-          if (!updates) return;
-          for (const update of updates) {
-            const key = update?.key;
-            const msgId = this.serializeKeyId(key);
-            if (this.messageIndex.has(msgId)) {
-              const existing = this.messageIndex.get(msgId);
-              const receipts = update?.receipt;
-              const merged = {
-                ...existing,
-                receipts: receipts
-                  ? [...(existing.receipts || []), receipts]
-                  : existing.receipts,
-              };
-              this.setBoundedMapEntry(
-                this.messageIndex,
-                msgId,
-                merged,
-                this.maxMessageIndexSize,
-              );
-            }
-            if (this.storeService) {
-              try {
-                this.storeService.insertMessageReceipt(
-                  msgId,
-                  JSON.stringify(update),
-                );
-              } catch (error) {
-                log.warn({ err: error }, "Failed to persist message receipt");
-              }
-            }
-          }
-        });
-
-        sock.ev.on("messages.delete", (payload: any) => {
-          this.logEvent("messages.delete", {
-            all: Boolean(payload?.all),
-            jid: payload?.jid,
-            count: Array.isArray(payload?.keys) ? payload.keys.length : 0,
-          });
-          if (!payload) return;
-          if (payload.all && payload.jid) {
-            if (this.storeService) {
-              this.storeService.deleteMessagesByChat(payload.jid);
-            }
-            this.messagesByChat.delete(payload.jid);
-            return;
-          }
-          const keys = payload.keys || [];
-          for (const key of keys) {
-            const jid = key?.remoteJid;
-            const id = key?.id;
-            if (!jid || !id) continue;
-            const msgId = `${jid}:${id}`;
-            this.messageIndex.delete(msgId);
-            this.messageKeyIndex.delete(id);
-            const list = this.messagesByChat.get(jid);
-            if (list?.length) {
-              const filtered = list.filter((msg: any) => msg?.key?.id !== id);
-              this.messagesByChat.set(jid, filtered);
-            }
-            if (this.storeService) {
-              this.storeService.deleteMessageById(msgId);
-            }
-          }
-        });
-
-        sock.ev.on("chats.set", (payload: any) => {
-          this.logEvent("chats.set", {
-            count: Array.isArray(payload?.chats) ? payload.chats.length : 0,
-          });
-          this.sync.handleChatsSet(payload);
-        });
-
-        sock.ev.on("messages.set", (payload: any) => {
-          this.logEvent("messages.set", {
-            count: Array.isArray(payload?.messages)
-              ? payload.messages.length
-              : 0,
-          });
-          this.sync.handleMessagesSet(payload);
-        });
-
-        sock.ev.on("chats.upsert", (payload: any) => {
-          this.logEvent("chats.upsert", {
-            count: Array.isArray(payload) ? payload.length : 0,
-          });
-          this.sync.handleChatsUpsert(payload);
-        });
-
-        sock.ev.on("chats.update", (payload: any) => {
-          this.logEvent("chats.update", {
-            count: Array.isArray(payload) ? payload.length : 0,
-          });
-          this.sync.handleChatsUpdate(payload);
-        });
-
-        sock.ev.on("contacts.upsert", (payload: any) => {
-          this.logEvent("contacts.upsert", {
-            count: Array.isArray(payload) ? payload.length : 0,
-          });
-          if (payload && Array.isArray(payload)) {
-            log.info({ count: payload.length }, "Contacts upsert");
-            for (const contact of payload) {
-              this.upsertStoredContact(contact);
-              this.storeLidMappingFromContact(contact);
-            }
-          }
-        });
-
-        sock.ev.on("contacts.update", (payload: any) => {
-          this.logEvent("contacts.update", {
-            count: Array.isArray(payload) ? payload.length : 0,
-          });
-          if (payload && Array.isArray(payload)) {
-            log.info({ count: payload.length }, "Contacts update");
-            for (const contact of payload) {
-              this.upsertStoredContact(contact);
-              this.storeLidMappingFromContact(contact);
-            }
-          }
-        });
-
-        sock.ev.on("lid-mapping.update", (payload: any) => {
-          this.logEvent("lid-mapping.update", {
-            type: Array.isArray(payload) ? "array" : typeof payload,
-          });
-          const mappings = Array.isArray(payload) ? payload : [payload];
-          for (const item of mappings) {
-            if (!item) continue;
-            const lid = item?.lid || item?.lidJid || item?.jid || null;
-            const pn = item?.pn || item?.pnJid || item?.phoneNumber || null;
-            if (lid && pn) {
-              this.storeLidMapping(
-                String(lid),
-                this.isPnJid(String(pn)) ? String(pn) : `${pn}@s.whatsapp.net`,
-              );
-            }
-          }
-        });
-
-        sock.ev.on("messaging-history.set", (payload: any) => {
-          this.logEvent("messaging-history.set", {
-            chats: Array.isArray(payload?.chats) ? payload.chats.length : 0,
-            contacts: Array.isArray(payload?.contacts)
-              ? payload.contacts.length
-              : 0,
-            messages: Array.isArray(payload?.messages)
-              ? payload.messages.length
-              : 0,
-            isLatest: payload?.isLatest,
-            progress: payload?.progress,
-            syncType: payload?.syncType,
-          });
-          this.sync.handleMessagingHistorySet(payload);
-          const contacts = payload?.contacts;
-          if (contacts && Array.isArray(contacts)) {
-            for (const contact of contacts) {
-              this.upsertStoredContact(contact);
-              this.storeLidMappingFromContact(contact);
-            }
-          }
-        });
-      })().finally(() => {
-        this.initializing = null;
-        log.info("Initialize flow settled");
+    this.initializing = (async () => {
+      log.info("Initializing WhatsApp client");
+      await this.client.initialize(async (key: any) => {
+        const cached = key?.id ? this.messageKeyIndex.get(key.id) : undefined;
+        return cached?.message;
       });
 
-      await this.initializing;
+      const sock = this.client.getSocket();
+      log.info("WhatsApp client initialized; wiring socket events");
+      log.info(
+        {
+          eventLogEnabled: this.eventLogEnabled,
+          eventStreamEnabled: this.eventStreamEnabled,
+          eventStreamPath: this.eventStreamPath,
+        },
+        "WhatsApp event debug config",
+      );
+
+      if (this.eventLogEnabled || this.eventStreamEnabled) {
+        if (this.eventStreamEnabled) {
+          try {
+            fs.writeFileSync(this.eventStreamPath, "", { flag: "a" });
+          } catch (err) {
+            log.warn({ err }, "Failed to touch WhatsApp event stream file");
+          }
+        }
+        const originalEmit = sock.ev.emit.bind(sock.ev);
+        sock.ev.emit = ((event: string, ...args: any[]) => {
+          if (this.eventStreamEnabled) {
+            this.writeEventStream(event, args);
+          }
+          if (this.eventLogEnabled) {
+            const summary = this.summarizeEventPayload(event, args);
+            log.info({ event, ...summary }, "WhatsApp event (raw)");
+          }
+          return originalEmit(event, ...args);
+        }) as typeof sock.ev.emit;
+      }
+
+      if (this.eventStreamEnabled) {
+        try {
+          this.eventStreamWriter = fs.createWriteStream(this.eventStreamPath, {
+            flags: "a",
+          });
+          log.info(
+            { path: this.eventStreamPath },
+            "WhatsApp event stream capture enabled",
+          );
+        } catch (err) {
+          log.warn({ err }, "Failed to enable WhatsApp event stream capture");
+        }
+      }
+
+      sock.ev.on("connection.update", (update: any) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (connection) {
+          log.info({ connection }, "WhatsApp connection update");
+        }
+        this.logEvent("connection.update", {
+          connection,
+          hasQr: Boolean(qr),
+          isOnline: update?.isOnline,
+          receivedPendingNotifications: update?.receivedPendingNotifications,
+          statusCode: lastDisconnect?.error?.output?.statusCode,
+          reason: lastDisconnect?.error?.message,
+        });
+
+        if (qr) {
+          this.latestQrCode = qr;
+          log.info("QR code received.");
+        }
+
+        if (connection === "open") {
+          this.isAuthenticatedFlag = true;
+          this.isReadyFlag = true;
+          this.latestQrCode = null;
+          this.sessionReplaced = false;
+          this.lastDisconnectReason = null;
+          this.lastDisconnectAt = null;
+          this.reconnectAttempts = 0;
+          this.clearDisconnectRecoveryTimer();
+          this.disconnectRecoveryInProgress = false;
+          log.info("WhatsApp connection opened.");
+          this.sync.scheduleWarmup(() => this.forceResync());
+        }
+
+        if (connection === "close") {
+          this.isReadyFlag = false;
+          this.isAuthenticatedFlag = false;
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          const reason = lastDisconnect?.error?.message;
+          const reasonText = reason ? String(reason) : "";
+          this.lastDisconnectReason =
+            reasonText ||
+            (typeof statusCode === "number" ? String(statusCode) : null);
+          this.lastDisconnectAt = Date.now();
+          if (
+            statusCode === DisconnectReason.connectionReplaced ||
+            reasonText.toLowerCase().includes("conflict") ||
+            reasonText.toLowerCase().includes("replaced")
+          ) {
+            this.sessionReplaced = true;
+          }
+          log.warn({ statusCode, reason }, "WhatsApp connection closed.");
+          this.scheduleDisconnectRecovery(statusCode, reasonText);
+          if (statusCode === DisconnectReason.loggedOut) {
+            log.warn("WhatsApp logged out. Clearing session.");
+            try {
+              fs.rmSync(this.sessionDir, { recursive: true, force: true });
+            } catch (_error) {
+              // Ignore
+            }
+            this.reconnect().catch((err) =>
+              log.error({ err }, "Failed to reconnect WhatsApp"),
+            );
+          } else if (
+            statusCode === 401 ||
+            reason?.includes("Connection Failure")
+          ) {
+            log.warn(
+              "WhatsApp connection failed. Resetting session and reconnecting.",
+            );
+            try {
+              fs.rmSync(this.sessionDir, { recursive: true, force: true });
+            } catch (_error) {
+              // Ignore
+            }
+            this.reconnect().catch((err) =>
+              log.error({ err }, "Failed to reconnect WhatsApp"),
+            );
+          } else {
+            this.reconnect().catch((err) =>
+              log.error({ err }, "Failed to reconnect WhatsApp"),
+            );
+          }
+        }
+      });
+
+      sock.ev.on("messages.upsert", (ev: any) => {
+        this.logEvent("messages.upsert", {
+          type: ev?.type,
+          count: Array.isArray(ev?.messages) ? ev.messages.length : 0,
+          jids: Array.isArray(ev?.messages)
+            ? ev.messages.map((m: any) => m?.key?.remoteJid).filter(Boolean)
+            : [],
+          ids: Array.isArray(ev?.messages)
+            ? ev.messages.map((m: any) => m?.key?.id).filter(Boolean)
+            : [],
+        });
+        if (!ev?.messages) return;
+        for (const msg of ev.messages) {
+          this.trackMessage(msg);
+          this.upsertStoredMessage(msg);
+          const jid = msg?.key?.remoteJid;
+          if (jid) {
+            this.upsertStoredChat({
+              id: jid,
+              conversationTimestamp: msg?.messageTimestamp,
+            });
+          }
+          void this.maybeAutoDownloadMedia(msg);
+        }
+      });
+
+      sock.ev.on("messages.update", (updates: any[]) => {
+        this.logEvent("messages.update", {
+          count: Array.isArray(updates) ? updates.length : 0,
+        });
+        if (!updates) return;
+        for (const update of updates) {
+          const key =
+            update?.key?.remoteJid && update?.key?.id
+              ? `${update.key.remoteJid}:${update.key.id}`
+              : null;
+          if (key && this.messageIndex.has(key)) {
+            const existing = this.messageIndex.get(key);
+            const merged = {
+              ...existing,
+              ...update.update,
+              message: {
+                ...(existing.message || {}),
+                ...(update.update?.message || {}),
+              },
+            };
+            this.setBoundedMapEntry(
+              this.messageIndex,
+              key,
+              merged,
+              this.maxMessageIndexSize,
+            );
+            if (update.update?.message) {
+              this.updateStoredMessageContent(merged);
+            }
+          } else if (update?.update?.message && update?.key?.remoteJid) {
+            const synthetic = {
+              key: update.key,
+              message: update.update.message,
+              messageTimestamp:
+                update.update?.messageTimestamp ??
+                update.update?.timestamp ??
+                0,
+            };
+            this.updateStoredMessageContent(synthetic);
+          }
+        }
+      });
+
+      sock.ev.on("messages.media-update", (updates: any[]) => {
+        this.logEvent("messages.media-update", {
+          count: Array.isArray(updates) ? updates.length : 0,
+        });
+        if (!updates) return;
+        for (const update of updates) {
+          const key = update?.key;
+          const msgId = this.serializeKeyId(key);
+          if (this.messageIndex.has(msgId)) {
+            const existing = this.messageIndex.get(msgId);
+            const merged = {
+              ...existing,
+              media: {
+                ...(existing.media || {}),
+                ...(update.media || {}),
+              },
+            };
+            this.setBoundedMapEntry(
+              this.messageIndex,
+              msgId,
+              merged,
+              this.maxMessageIndexSize,
+            );
+          }
+        }
+      });
+
+      sock.ev.on("messages.reaction", (updates: any[]) => {
+        this.logEvent("messages.reaction", {
+          count: Array.isArray(updates) ? updates.length : 0,
+        });
+        if (!updates) return;
+        for (const update of updates) {
+          const key = update?.key;
+          const msgId = this.serializeKeyId(key);
+          if (this.messageIndex.has(msgId)) {
+            const existing = this.messageIndex.get(msgId);
+            const reaction = update?.reaction;
+            const merged = {
+              ...existing,
+              reactions: reaction
+                ? [...(existing.reactions || []), reaction]
+                : existing.reactions,
+            };
+            this.setBoundedMapEntry(
+              this.messageIndex,
+              msgId,
+              merged,
+              this.maxMessageIndexSize,
+            );
+          }
+          if (this.storeService) {
+            try {
+              this.storeService.insertMessageReaction(
+                msgId,
+                JSON.stringify(update),
+              );
+            } catch (error) {
+              log.warn({ err: error }, "Failed to persist message reaction");
+            }
+          }
+        }
+      });
+
+      sock.ev.on("message-receipt.update", (updates: any[]) => {
+        this.logEvent("message-receipt.update", {
+          count: Array.isArray(updates) ? updates.length : 0,
+        });
+        if (!updates) return;
+        for (const update of updates) {
+          const key = update?.key;
+          const msgId = this.serializeKeyId(key);
+          if (this.messageIndex.has(msgId)) {
+            const existing = this.messageIndex.get(msgId);
+            const receipts = update?.receipt;
+            const merged = {
+              ...existing,
+              receipts: receipts
+                ? [...(existing.receipts || []), receipts]
+                : existing.receipts,
+            };
+            this.setBoundedMapEntry(
+              this.messageIndex,
+              msgId,
+              merged,
+              this.maxMessageIndexSize,
+            );
+          }
+          if (this.storeService) {
+            try {
+              this.storeService.insertMessageReceipt(
+                msgId,
+                JSON.stringify(update),
+              );
+            } catch (error) {
+              log.warn({ err: error }, "Failed to persist message receipt");
+            }
+          }
+        }
+      });
+
+      sock.ev.on("messages.delete", (payload: any) => {
+        this.logEvent("messages.delete", {
+          all: Boolean(payload?.all),
+          jid: payload?.jid,
+          count: Array.isArray(payload?.keys) ? payload.keys.length : 0,
+        });
+        if (!payload) return;
+        if (payload.all && payload.jid) {
+          if (this.storeService) {
+            this.storeService.deleteMessagesByChat(payload.jid);
+          }
+          this.messagesByChat.delete(payload.jid);
+          return;
+        }
+        const keys = payload.keys || [];
+        for (const key of keys) {
+          const jid = key?.remoteJid;
+          const id = key?.id;
+          if (!jid || !id) continue;
+          const msgId = `${jid}:${id}`;
+          this.messageIndex.delete(msgId);
+          this.messageKeyIndex.delete(id);
+          const list = this.messagesByChat.get(jid);
+          if (list?.length) {
+            const filtered = list.filter((msg: any) => msg?.key?.id !== id);
+            this.messagesByChat.set(jid, filtered);
+          }
+          if (this.storeService) {
+            this.storeService.deleteMessageById(msgId);
+          }
+        }
+      });
+
+      sock.ev.on("chats.set", (payload: any) => {
+        this.logEvent("chats.set", {
+          count: Array.isArray(payload?.chats) ? payload.chats.length : 0,
+        });
+        this.sync.handleChatsSet(payload);
+      });
+
+      sock.ev.on("messages.set", (payload: any) => {
+        this.logEvent("messages.set", {
+          count: Array.isArray(payload?.messages) ? payload.messages.length : 0,
+        });
+        this.sync.handleMessagesSet(payload);
+      });
+
+      sock.ev.on("chats.upsert", (payload: any) => {
+        this.logEvent("chats.upsert", {
+          count: Array.isArray(payload) ? payload.length : 0,
+        });
+        this.sync.handleChatsUpsert(payload);
+      });
+
+      sock.ev.on("chats.update", (payload: any) => {
+        this.logEvent("chats.update", {
+          count: Array.isArray(payload) ? payload.length : 0,
+        });
+        this.sync.handleChatsUpdate(payload);
+      });
+
+      sock.ev.on("contacts.upsert", (payload: any) => {
+        this.logEvent("contacts.upsert", {
+          count: Array.isArray(payload) ? payload.length : 0,
+        });
+        if (payload && Array.isArray(payload)) {
+          log.info({ count: payload.length }, "Contacts upsert");
+          for (const contact of payload) {
+            this.upsertStoredContact(contact);
+            this.storeLidMappingFromContact(contact);
+          }
+        }
+      });
+
+      sock.ev.on("contacts.update", (payload: any) => {
+        this.logEvent("contacts.update", {
+          count: Array.isArray(payload) ? payload.length : 0,
+        });
+        if (payload && Array.isArray(payload)) {
+          log.info({ count: payload.length }, "Contacts update");
+          for (const contact of payload) {
+            this.upsertStoredContact(contact);
+            this.storeLidMappingFromContact(contact);
+          }
+        }
+      });
+
+      sock.ev.on("lid-mapping.update", (payload: any) => {
+        this.logEvent("lid-mapping.update", {
+          type: Array.isArray(payload) ? "array" : typeof payload,
+        });
+        const mappings = Array.isArray(payload) ? payload : [payload];
+        for (const item of mappings) {
+          if (!item) continue;
+          const lid = item?.lid || item?.lidJid || item?.jid || null;
+          const pn = item?.pn || item?.pnJid || item?.phoneNumber || null;
+          if (lid && pn) {
+            this.storeLidMapping(
+              String(lid),
+              this.isPnJid(String(pn)) ? String(pn) : `${pn}@s.whatsapp.net`,
+            );
+          }
+        }
+      });
+
+      sock.ev.on("messaging-history.set", (payload: any) => {
+        this.logEvent("messaging-history.set", {
+          chats: Array.isArray(payload?.chats) ? payload.chats.length : 0,
+          contacts: Array.isArray(payload?.contacts)
+            ? payload.contacts.length
+            : 0,
+          messages: Array.isArray(payload?.messages)
+            ? payload.messages.length
+            : 0,
+          isLatest: payload?.isLatest,
+          progress: payload?.progress,
+          syncType: payload?.syncType,
+        });
+        this.sync.handleMessagingHistorySet(payload);
+        const contacts = payload?.contacts;
+        if (contacts && Array.isArray(contacts)) {
+          for (const contact of contacts) {
+            this.upsertStoredContact(contact);
+            this.storeLidMappingFromContact(contact);
+          }
+        }
+      });
+    })().finally(() => {
+      this.initializing = null;
+      log.info("Initialize flow settled");
+    });
+
+    await this.initializing;
+  }
+
+  async initialize(): Promise<void> {
+    await this.withLifecycleLock(async () => {
+      await this.initializeWithinLifecycleLock();
     });
   }
 
@@ -1520,7 +1521,7 @@ export class WhatsAppService {
         log.info("Reconnect: destroying current WhatsApp client");
         await this.destroyInternal();
         log.info("Reconnect: initializing WhatsApp client");
-        await this.initialize();
+        await this.initializeWithinLifecycleLock();
       });
       log.info("Reconnect flow completed");
     } catch (error) {
@@ -1551,7 +1552,7 @@ export class WhatsAppService {
         }
       });
       await this.destroyInternal();
-      await this.initialize();
+      await this.initializeWithinLifecycleLock();
       this.ensureReconnectAfterResync();
     });
   }
@@ -1565,7 +1566,7 @@ export class WhatsAppService {
   async restart(): Promise<void> {
     await this.withLifecycleLock(async () => {
       await this.destroyInternal();
-      await this.initialize();
+      await this.initializeWithinLifecycleLock();
     });
   }
 
@@ -1746,7 +1747,6 @@ export class WhatsAppService {
     this.isAuthenticatedFlag = false;
     this.isReadyFlag = false;
     this.latestQrCode = null;
-    this.clearDisconnectRecoveryTimer();
     log.info("Finished destroying WhatsApp client internals");
   }
 
