@@ -179,6 +179,7 @@ Current behavior:
 
 - On app-state corruption signals, the service first tries a soft recovery with `forceResync()`.
 - If the same class of failure repeats within a time window, it escalates to an internal WhatsApp client restart.
+- On disconnects such as `Connection Terminated`, the service schedules a disconnect watchdog and escalates to an internal restart if the socket does not return to `open` in time.
 - A dedicated `/healthz` endpoint reports `503` only when the service is genuinely stuck outside the allowed recovery window.
 - Docker health checks use `/healthz`, so the container is restarted only after in-process recovery has had a chance to work.
 
@@ -207,6 +208,8 @@ Environment variables:
 | `WA_SYNC_RECOVERY_WINDOW_MS` | `900000` | Time window used to count repeated app-state corruption failures. |
 | `WA_SYNC_SOFT_RECOVERY_LIMIT` | `2` | Number of soft recoveries before escalating to an internal restart. |
 | `WA_READINESS_GRACE_MS` | `180000` | Grace period during recovery/disconnect before `/healthz` turns unhealthy. |
+| `WA_DISCONNECT_RECOVERY_DELAY_MS` | `30000` | How long to wait after a socket close before the disconnect watchdog forces reconnect/restart. |
+| `WA_DISCONNECT_RECOVERY_RESTART_CODES` | `428` | Comma-separated disconnect status codes that should escalate straight to an internal restart watchdog. |
 | `WA_SEND_DEDUP_WINDOW_MS` | `45000` | Suppress exact duplicate `send_message` requests to the same JID within this window. |
 | `WA_IDEMPOTENCY_TTL_MS` | `86400000` | How long completed `send_message` idempotency records are retained in SQLite for safe retries. |
 | `WA_MESSAGE_INDEX_MAX` | `20000` | Max in-memory entries for message index (`jid:id` -> raw message). |

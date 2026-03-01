@@ -54,6 +54,8 @@ export class WhatsAppService {
   private lastDisconnectAt: number | null = null;
   private lifecycleLock: Promise<void> = Promise.resolve();
   private reconnectAttempts = 0;
+  private disconnectRecoveryTimer: NodeJS.Timeout | null = null;
+  private disconnectRecoveryInProgress = false;
   private readonly maxMessageIndexSize = Math.max(
     1000,
     Number(process.env.WA_MESSAGE_INDEX_MAX || 20000) || 20000,
@@ -98,6 +100,16 @@ export class WhatsAppService {
   private readonly readinessGraceMs = Math.max(
     30000,
     Number(process.env.WA_READINESS_GRACE_MS || 180000) || 180000,
+  );
+  private readonly disconnectRecoveryDelayMs = Math.max(
+    5000,
+    Number(process.env.WA_DISCONNECT_RECOVERY_DELAY_MS || 30000) || 30000,
+  );
+  private readonly disconnectRecoveryRestartCodes = new Set<number>(
+    String(process.env.WA_DISCONNECT_RECOVERY_RESTART_CODES || "428")
+      .split(",")
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isFinite(value)),
   );
   private readonly sendDedupWindowMs = Math.max(
     0,
@@ -305,6 +317,76 @@ export class WhatsAppService {
         }
       })();
     }, 0);
+  }
+
+  private clearDisconnectRecoveryTimer(): void {
+    if (!this.disconnectRecoveryTimer) return;
+    clearTimeout(this.disconnectRecoveryTimer);
+    this.disconnectRecoveryTimer = null;
+  }
+
+  private scheduleDisconnectRecovery(
+    statusCode: number | undefined,
+    reasonText: string,
+  ): void {
+    this.clearDisconnectRecoveryTimer();
+
+    const normalizedReason = reasonText.toLowerCase();
+    const shouldRestart =
+      (typeof statusCode === "number" &&
+        this.disconnectRecoveryRestartCodes.has(statusCode)) ||
+      normalizedReason.includes("connection terminated");
+    const strategy = shouldRestart ? "restart" : "reconnect";
+
+    log.warn(
+      {
+        statusCode,
+        reason: reasonText,
+        strategy,
+        delayMs: this.disconnectRecoveryDelayMs,
+      },
+      "Scheduled disconnect recovery watchdog",
+    );
+
+    this.disconnectRecoveryTimer = setTimeout(() => {
+      this.disconnectRecoveryTimer = null;
+      if (this.isReadyFlag) {
+        log.info(
+          { statusCode, reason: reasonText, strategy },
+          "Skipping disconnect recovery because WhatsApp is already ready",
+        );
+        return;
+      }
+      if (this.disconnectRecoveryInProgress) {
+        log.warn(
+          { statusCode, reason: reasonText, strategy },
+          "Disconnect recovery watchdog skipped because recovery is already in progress",
+        );
+        return;
+      }
+
+      this.disconnectRecoveryInProgress = true;
+      void (async () => {
+        try {
+          log.warn(
+            { statusCode, reason: reasonText, strategy },
+            "Running disconnect recovery watchdog",
+          );
+          if (strategy === "restart") {
+            await this.restart();
+          } else {
+            await this.reconnect();
+          }
+        } catch (error) {
+          log.error(
+            { err: error, statusCode, reason: reasonText, strategy },
+            "Disconnect recovery watchdog failed",
+          );
+        } finally {
+          this.disconnectRecoveryInProgress = false;
+        }
+      })();
+    }, this.disconnectRecoveryDelayMs);
   }
 
   private normalizeJid(jid: string): string {
@@ -960,6 +1042,9 @@ export class WhatsAppService {
   async initialize(): Promise<void> {
     await this.withLifecycleLock(async () => {
       if (this.initializing) {
+        log.info(
+          "Initialize requested while another initialize is already running",
+        );
         await this.initializing;
         return;
       }
@@ -967,12 +1052,14 @@ export class WhatsAppService {
       this.initStoreService();
 
       this.initializing = (async () => {
+        log.info("Initializing WhatsApp client");
         await this.client.initialize(async (key: any) => {
           const cached = key?.id ? this.messageKeyIndex.get(key.id) : undefined;
           return cached?.message;
         });
 
         const sock = this.client.getSocket();
+        log.info("WhatsApp client initialized; wiring socket events");
         log.info(
           {
             eventLogEnabled: this.eventLogEnabled,
@@ -1046,6 +1133,8 @@ export class WhatsAppService {
             this.lastDisconnectReason = null;
             this.lastDisconnectAt = null;
             this.reconnectAttempts = 0;
+            this.clearDisconnectRecoveryTimer();
+            this.disconnectRecoveryInProgress = false;
             log.info("WhatsApp connection opened.");
             this.sync.scheduleWarmup(() => this.forceResync());
           }
@@ -1068,6 +1157,7 @@ export class WhatsAppService {
               this.sessionReplaced = true;
             }
             log.warn({ statusCode, reason }, "WhatsApp connection closed.");
+            this.scheduleDisconnectRecovery(statusCode, reasonText);
             if (statusCode === DisconnectReason.loggedOut) {
               log.warn("WhatsApp logged out. Clearing session.");
               try {
@@ -1402,6 +1492,7 @@ export class WhatsAppService {
         });
       })().finally(() => {
         this.initializing = null;
+        log.info("Initialize flow settled");
       });
 
       await this.initializing;
@@ -1410,6 +1501,9 @@ export class WhatsAppService {
 
   private async reconnect(): Promise<void> {
     if (this.reconnecting) {
+      log.info(
+        "Reconnect requested while another reconnect is already running",
+      );
       return;
     }
     this.reconnecting = true;
@@ -1417,11 +1511,18 @@ export class WhatsAppService {
       const attempt = Math.min(this.reconnectAttempts, 6);
       const delayMs = Math.min(30000, 1000 * Math.pow(2, attempt));
       this.reconnectAttempts += 1;
+      log.warn(
+        { attempt: attempt + 1, delayMs },
+        "Starting WhatsApp reconnect",
+      );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       await this.withLifecycleLock(async () => {
+        log.info("Reconnect: destroying current WhatsApp client");
         await this.destroyInternal();
+        log.info("Reconnect: initializing WhatsApp client");
         await this.initialize();
       });
+      log.info("Reconnect flow completed");
     } catch (error) {
       log.error({ err: error }, "Reconnect failed");
     } finally {
@@ -1631,6 +1732,7 @@ export class WhatsAppService {
   }
 
   private async destroyInternal(): Promise<void> {
+    log.info("Destroying WhatsApp client internals");
     await this.client.destroy();
     if (this.eventStreamWriter) {
       try {
@@ -1644,6 +1746,8 @@ export class WhatsAppService {
     this.isAuthenticatedFlag = false;
     this.isReadyFlag = false;
     this.latestQrCode = null;
+    this.clearDisconnectRecoveryTimer();
+    log.info("Finished destroying WhatsApp client internals");
   }
 
   private logEvent(event: string, payload: Record<string, unknown>): void {
