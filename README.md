@@ -185,8 +185,7 @@ Current behavior:
 - A dedicated `/healthz` endpoint reports `503` only when the service is genuinely stuck outside the allowed recovery window.
 - Docker health checks use `/healthz`, so the container is restarted only after in-process recovery has had a chance to work.
 
-This is a pragmatic workaround, not a protocol-level fix. It reduces operator intervention but does not replace upgrading or replacing Baileys when upstream behavior changes.
-This workaround may be removed after migrating to a newer Baileys implementation or after confirming that the underlying session-state corruption issue is resolved.
+These recovery mechanisms reduce operator intervention and improve resilience against common WhatsApp/Baileys session failures.
 
 ## License
 
