@@ -180,6 +180,8 @@ Current behavior:
 - On app-state corruption signals, the service first tries a soft recovery with `forceResync()`.
 - If the same class of failure repeats within a time window, it escalates to an internal WhatsApp client restart.
 - On disconnects such as `Connection Terminated`, the service schedules a disconnect watchdog and escalates to an internal restart if the socket does not return to `open` in time.
+- The reconnect lifecycle is guarded against nested lock deadlocks, so disconnect recovery can complete without requiring a manual container restart.
+- Recent production observations show repeated socket disconnects (`428 Connection Terminated`, `503 Stream Errored`) being auto-recovered back to `open`.
 - A dedicated `/healthz` endpoint reports `503` only when the service is genuinely stuck outside the allowed recovery window.
 - Docker health checks use `/healthz`, so the container is restarted only after in-process recovery has had a chance to work.
 
