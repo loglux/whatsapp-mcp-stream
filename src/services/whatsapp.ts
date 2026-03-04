@@ -627,6 +627,10 @@ export class WhatsAppService {
     canonicalId: string,
     storedName: string | null | undefined,
   ): string | null {
+    if (canonicalId.endsWith("@g.us")) {
+      const groupName = this.getBestGroupName(related, canonicalId, storedName);
+      if (groupName) return groupName;
+    }
     if (this.isUsableDisplayName(storedName, canonicalId)) return storedName!;
     for (const jid of related) {
       const name = this.getBestContactName(jid);
@@ -641,6 +645,28 @@ export class WhatsAppService {
     return this.isUsableDisplayName(storedName, canonicalId)
       ? storedName!
       : null;
+  }
+
+  private getBestGroupName(
+    related: string[],
+    canonicalId: string,
+    storedName: string | null | undefined,
+  ): string | null {
+    const candidates = [storedName];
+    if (this.storeService) {
+      for (const jid of [canonicalId, ...related]) {
+        const meta = this.storeService.getGroupMeta(jid);
+        if (meta?.subject) {
+          candidates.push(meta.subject);
+        }
+      }
+    }
+    for (const candidate of candidates) {
+      if (this.isUsableDisplayName(candidate, canonicalId)) {
+        return candidate!;
+      }
+    }
+    return null;
   }
 
   private isUsableDisplayName(
