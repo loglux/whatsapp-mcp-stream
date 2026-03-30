@@ -11,6 +11,10 @@ Key points:
 - Admin UI: QR, status, logout, runtime settings
 - Media: upload endpoints + `/media` hosting + MCP download tool
 
+## Hosted deployment
+
+A hosted deployment is available on [Fronteir AI](https://fronteir.ai/mcp/loglux-whatsapp-mcp-stream).
+
 ## Quick Start (Docker)
 
 ```bash
