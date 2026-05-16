@@ -3,7 +3,12 @@ import path from "path";
 import axios from "axios";
 import { fileTypeFromBuffer } from "file-type";
 import { log } from "../utils/logger.js";
-import { mapContact, mapMessage, mapStoredMessage } from "../core/mappers.js";
+import {
+  mapContact,
+  mapMessage,
+  mapStoredMessage,
+  resolveStoredSender,
+} from "../core/mappers.js";
 import {
   ResolvedContact,
   SimpleChat,
@@ -47,6 +52,8 @@ export class WhatsAppService {
   private latestQrCode: string | null = null;
   private isAuthenticatedFlag = false;
   private isReadyFlag = false;
+  private ownJid: string | null = null;
+  private legacySenderBackfilled = false;
   private initializing: Promise<void> | null = null;
   private readonly messageIndexStore: MessageIndexStore;
   private lifecycleLock: Promise<void> = Promise.resolve();
@@ -260,7 +267,7 @@ export class WhatsAppService {
     const record: StoredMessage = {
       id: mapped.id,
       chat_jid: mapped.to,
-      from: mapped.from,
+      from: resolveStoredSender(mapped, this.ownJid),
       to: mapped.to,
       timestamp: mapped.timestamp,
       from_me: mapped.fromMe ? 1 : 0,
@@ -673,6 +680,22 @@ export class WhatsAppService {
           this.isAuthenticatedFlag = true;
           this.isReadyFlag = true;
           this.latestQrCode = null;
+          const userId = sock?.user?.id;
+          if (typeof userId === "string" && userId.length > 0) {
+            this.ownJid = JidResolver.normalizeJid(userId);
+            if (!this.legacySenderBackfilled && this.storeService) {
+              const changed = this.storeService.backfillLegacySender(
+                this.ownJid,
+              );
+              this.legacySenderBackfilled = true;
+              if (changed > 0) {
+                log.info(
+                  { updated: changed, ownJid: this.ownJid },
+                  "Backfilled legacy 'me' sender entries to real JID",
+                );
+              }
+            }
+          }
           this.recovery.markConnectionOpen();
           log.info("WhatsApp connection opened.");
           this.sync.scheduleWarmup(() => this.forceResync());

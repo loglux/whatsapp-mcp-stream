@@ -4,6 +4,7 @@ import {
   mapMessage,
   mapStoredMessage,
   mapContact,
+  resolveStoredSender,
 } from "../../src/core/mappers.js";
 import type { StoredMessage } from "../../src/storage/message-store.js";
 
@@ -13,9 +14,9 @@ describe("extractText", () => {
   });
 
   it("returns extendedTextMessage.text", () => {
-    expect(
-      extractText({ extendedTextMessage: { text: "extended hi" } }),
-    ).toBe("extended hi");
+    expect(extractText({ extendedTextMessage: { text: "extended hi" } })).toBe(
+      "extended hi",
+    );
   });
 
   it("returns imageMessage.caption", () => {
@@ -173,6 +174,36 @@ describe("mapStoredMessage", () => {
   });
 });
 
+describe("resolveStoredSender", () => {
+  const incoming = {
+    id: "x:y",
+    body: "",
+    from: "alice@s.whatsapp.net",
+    to: "me",
+    timestamp: 0,
+    fromMe: false,
+    hasMedia: false,
+    type: "conversation",
+  };
+  const outgoing = { ...incoming, from: "me", fromMe: true };
+
+  it("returns mapped.from verbatim for incoming messages", () => {
+    expect(resolveStoredSender(incoming, "447700900111@s.whatsapp.net")).toBe(
+      "alice@s.whatsapp.net",
+    );
+  });
+
+  it("substitutes the bot's own JID for outgoing messages when known", () => {
+    expect(resolveStoredSender(outgoing, "447700900111@s.whatsapp.net")).toBe(
+      "447700900111@s.whatsapp.net",
+    );
+  });
+
+  it("falls back to 'me' when ownJid is not yet known", () => {
+    expect(resolveStoredSender(outgoing, null)).toBe("me");
+  });
+});
+
 describe("mapContact", () => {
   it("flags group JIDs as group", () => {
     const c = mapContact({ id: "12345@g.us", name: "Group" });
@@ -197,11 +228,16 @@ describe("mapContact", () => {
 
   it("prefers name over verifiedName over notify", () => {
     expect(
-      mapContact({ id: "x@s.whatsapp.net", name: "A", verifiedName: "B", notify: "C" })
-        .name,
+      mapContact({
+        id: "x@s.whatsapp.net",
+        name: "A",
+        verifiedName: "B",
+        notify: "C",
+      }).name,
     ).toBe("A");
     expect(
-      mapContact({ id: "x@s.whatsapp.net", verifiedName: "B", notify: "C" }).name,
+      mapContact({ id: "x@s.whatsapp.net", verifiedName: "B", notify: "C" })
+        .name,
     ).toBe("B");
     expect(mapContact({ id: "x@s.whatsapp.net", notify: "C" }).name).toBe("C");
   });

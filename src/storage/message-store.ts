@@ -218,6 +218,21 @@ export class MessageStore {
     stmt.run({ ...chat, updated_at: Date.now() });
   }
 
+  /**
+   * One-shot migration: legacy rows persisted before the sender fix held the
+   * literal "me" string in the `sender` column for outgoing messages. Replace
+   * those with the real JID. Safe to call repeatedly — the WHERE clause makes
+   * subsequent runs no-ops.
+   */
+  backfillLegacySender(ownJid: string): number {
+    if (!ownJid) return 0;
+    const stmt = this.db.prepare(
+      `UPDATE messages SET sender = ? WHERE sender = 'me' AND from_me = 1`,
+    );
+    const info = stmt.run(ownJid);
+    return info.changes as number;
+  }
+
   upsertMessage(msg: StoredMessage): void {
     const stmt = this.db.prepare(
       `INSERT OR IGNORE INTO messages

@@ -61,6 +61,21 @@ export function mapMessage(
   };
 }
 
+/**
+ * Storage-layer sender resolution. `mapMessage` returns `from: "me"` for
+ * outgoing messages because that is the semantic the MCP API exposes to
+ * clients, but persisting `"me"` into the SQLite `sender` column loses the
+ * original JID. When `fromMe` is set and the bot's own JID is known, write
+ * the real JID instead so history rows stay useful across sessions.
+ */
+export function resolveStoredSender(
+  mapped: SimpleMessage,
+  ownJid: string | null,
+): string {
+  if (mapped.fromMe && ownJid) return ownJid;
+  return mapped.from;
+}
+
 export function mapStoredMessage(msg: StoredMessage): SimpleMessage {
   return {
     id: msg.id,

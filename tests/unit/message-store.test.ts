@@ -94,8 +94,12 @@ describe("MessageStore messages", () => {
 
   it("updateMessageContent returns the number of changed rows", () => {
     store.upsertMessage(sample);
-    expect(store.updateMessageContent(sample.id, "edited", 0, "conversation")).toBe(1);
-    expect(store.updateMessageContent("missing", "x", 0, "conversation")).toBe(0);
+    expect(
+      store.updateMessageContent(sample.id, "edited", 0, "conversation"),
+    ).toBe(1);
+    expect(store.updateMessageContent("missing", "x", 0, "conversation")).toBe(
+      0,
+    );
     expect(store.getMessageById(sample.id)?.body).toBe("edited");
   });
 
@@ -119,6 +123,49 @@ describe("MessageStore messages", () => {
     const row = store.getMessageById(sample.id);
     expect(row?.from).toBe("x@s.whatsapp.net");
     expect(row?.to).toBe("me");
+  });
+
+  describe("backfillLegacySender", () => {
+    it("rewrites only legacy 'me' sender rows that are outgoing", () => {
+      // outgoing with legacy "me" sender → should be rewritten
+      store.upsertMessage({
+        ...sample,
+        id: "me:OUT",
+        from: "me",
+        from_me: 1,
+      });
+      // incoming with literal "me" sender (stale) → from_me=0, leave alone
+      store.upsertMessage({
+        ...sample,
+        id: "me:IN",
+        from: "me",
+        from_me: 0,
+      });
+      // outgoing already fixed → leave alone
+      store.upsertMessage({
+        ...sample,
+        id: "me:FIXED",
+        from: "447@s.whatsapp.net",
+        from_me: 1,
+      });
+      const changed = store.backfillLegacySender("447@s.whatsapp.net");
+      expect(changed).toBe(1);
+      expect(store.getMessageById("me:OUT")?.from).toBe("447@s.whatsapp.net");
+      expect(store.getMessageById("me:IN")?.from).toBe("me");
+      expect(store.getMessageById("me:FIXED")?.from).toBe("447@s.whatsapp.net");
+    });
+
+    it("is a no-op on the second call (idempotent)", () => {
+      store.upsertMessage({ ...sample, id: "me:OUT", from: "me", from_me: 1 });
+      expect(store.backfillLegacySender("447@s.whatsapp.net")).toBe(1);
+      expect(store.backfillLegacySender("447@s.whatsapp.net")).toBe(0);
+    });
+
+    it("returns 0 when ownJid is empty", () => {
+      store.upsertMessage({ ...sample, id: "me:OUT", from: "me", from_me: 1 });
+      expect(store.backfillLegacySender("")).toBe(0);
+      expect(store.getMessageById("me:OUT")?.from).toBe("me");
+    });
   });
 });
 

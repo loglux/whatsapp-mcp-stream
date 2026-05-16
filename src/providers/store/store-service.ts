@@ -31,7 +31,12 @@ export class StoreService {
     return Boolean(this.messageStore);
   }
 
-  stats(): { chats: number; messages: number; media: number; contacts: number } | null {
+  stats(): {
+    chats: number;
+    messages: number;
+    media: number;
+    contacts: number;
+  } | null {
     return this.messageStore ? this.messageStore.stats() : null;
   }
 
@@ -62,7 +67,11 @@ export class StoreService {
     this.messageStore?.upsertContact(contact);
   }
 
-  upsertLidMapping(lidJid: string, pnJid: string | null, pnNumber: string | null): void {
+  upsertLidMapping(
+    lidJid: string,
+    pnJid: string | null,
+    pnNumber: string | null,
+  ): void {
     this.messageStore?.upsertLidMapping({
       lid_jid: lidJid,
       pn_jid: pnJid,
@@ -72,10 +81,14 @@ export class StoreService {
   }
 
   getLidForPn(pnJidOrNumber: string): string | null {
-    return this.messageStore ? this.messageStore.getLidForPn(pnJidOrNumber) : null;
+    return this.messageStore
+      ? this.messageStore.getLidForPn(pnJidOrNumber)
+      : null;
   }
 
-  getPnForLid(lidJid: string): { pnJid: string | null; pnNumber: string | null } | null {
+  getPnForLid(
+    lidJid: string,
+  ): { pnJid: string | null; pnNumber: string | null } | null {
     return this.messageStore ? this.messageStore.getPnForLid(lidJid) : null;
   }
 
@@ -116,7 +129,9 @@ export class StoreService {
   }
 
   getIdempotencyRecord(key: string): StoredIdempotencyRecord | null {
-    return this.messageStore ? this.messageStore.getIdempotencyRecord(key) : null;
+    return this.messageStore
+      ? this.messageStore.getIdempotencyRecord(key)
+      : null;
   }
 
   upsertIdempotencyRecord(record: StoredIdempotencyRecord): void {
@@ -129,12 +144,22 @@ export class StoreService {
       : 0;
   }
 
+  backfillLegacySender(ownJid: string): number {
+    return this.messageStore
+      ? this.messageStore.backfillLegacySender(ownJid)
+      : 0;
+  }
+
   searchMessages(query: string, limit = 20): StoredMessage[] {
-    return this.messageStore ? this.messageStore.searchMessages(query, limit) : [];
+    return this.messageStore
+      ? this.messageStore.searchMessages(query, limit)
+      : [];
   }
 
   getMediaByMessageId(messageId: string): StoredMedia | null {
-    return this.messageStore ? this.messageStore.getMediaByMessageId(messageId) : null;
+    return this.messageStore
+      ? this.messageStore.getMediaByMessageId(messageId)
+      : null;
   }
 
   listMediaByChat(jid: string): StoredMedia[] {
@@ -150,7 +175,9 @@ export class StoreService {
   }
 
   searchContacts(query: string, limit = 20): StoredContact[] {
-    return this.messageStore ? this.messageStore.searchContacts(query, limit) : [];
+    return this.messageStore
+      ? this.messageStore.searchContacts(query, limit)
+      : [];
   }
 
   upsertGroupMeta(meta: StoredGroupMeta): void {
@@ -169,6 +196,8 @@ export class StoreService {
   }
 
   listGroupParticipants(jid: string): StoredGroupParticipant[] {
-    return this.messageStore ? this.messageStore.listGroupParticipants(jid) : [];
+    return this.messageStore
+      ? this.messageStore.listGroupParticipants(jid)
+      : [];
   }
 }
