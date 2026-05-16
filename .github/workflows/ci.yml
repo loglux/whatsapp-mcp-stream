@@ -22,9 +22,6 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: "npm"
 
-      - name: Upgrade npm to 11.x
-        run: npm install -g npm@11
-
       - name: Install dependencies
         run: npm ci
 
