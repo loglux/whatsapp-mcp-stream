@@ -259,7 +259,7 @@ export class MessageStore {
 
   listMessages(jid: string, limit = 50): StoredMessage[] {
     const stmt = this.db.prepare(
-      `SELECT id, chat_jid, sender, recipient, timestamp, from_me, body, has_media, type
+      `SELECT id, chat_jid, sender AS "from", recipient AS "to", timestamp, from_me, body, has_media, type
        FROM messages
        WHERE chat_jid = ?
        ORDER BY timestamp DESC
@@ -270,7 +270,7 @@ export class MessageStore {
 
   listMessagesAll(jid: string): StoredMessage[] {
     const stmt = this.db.prepare(
-      `SELECT id, chat_jid, sender, recipient, timestamp, from_me, body, has_media, type
+      `SELECT id, chat_jid, sender AS "from", recipient AS "to", timestamp, from_me, body, has_media, type
        FROM messages
        WHERE chat_jid = ?
        ORDER BY timestamp ASC`,
@@ -280,7 +280,7 @@ export class MessageStore {
 
   getMessageById(id: string): StoredMessage | null {
     const stmt = this.db.prepare(
-      `SELECT id, chat_jid, sender, recipient, timestamp, from_me, body, has_media, type
+      `SELECT id, chat_jid, sender AS "from", recipient AS "to", timestamp, from_me, body, has_media, type
        FROM messages
        WHERE id = ?`,
     );
@@ -349,7 +349,7 @@ export class MessageStore {
 
   searchMessages(query: string, limit = 20): StoredMessage[] {
     const stmt = this.db.prepare(
-      `SELECT id, chat_jid, sender, recipient, timestamp, from_me, body, has_media, type
+      `SELECT id, chat_jid, sender AS "from", recipient AS "to", timestamp, from_me, body, has_media, type
        FROM messages
        WHERE body LIKE ?
        ORDER BY timestamp DESC
