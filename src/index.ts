@@ -41,7 +41,7 @@ if (resolvedTransport === 'stdio') {
 }
 
 import { WhatsAppMcpServer } from './server.js';
-import { log } from './utils/logger.js';
+import { log, flushLogs } from './utils/logger.js';
 import { BrowserProcessManager } from './utils/browser-process-manager.js';
 
 // Global reference to the server instance
@@ -77,21 +77,23 @@ async function gracefulShutdown(signal: string): Promise<void> {
     }
     
     log.info('Shutdown completed successfully');
-    
+    flushLogs();
+
     // Use a timeout to allow logs to be flushed before exiting
     setTimeout(() => {
       process.exit(0);
     }, 500);
   } catch (error) {
     log.error('Error during graceful shutdown:', error);
-    
+
     // Try one last time to clean up browser processes
     try {
       await browserProcessManager.cleanupOrphanedProcesses();
     } catch (cleanupError) {
       log.error('Error during emergency browser process cleanup:', cleanupError);
     }
-    
+    flushLogs();
+
     // Use a timeout to allow error logs to be flushed before exiting
     setTimeout(() => {
       process.exit(1);
