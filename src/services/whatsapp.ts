@@ -28,6 +28,7 @@ import { RecoveryManager } from "./recovery-manager.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { AutoDownloadManager } from "./auto-download-manager.js";
 import { StorageWriter } from "./storage-writer.js";
+import { ContactPresenter } from "./contact-presenter.js";
 
 import {
   ALL_WA_PATCH_NAMES,
@@ -74,6 +75,7 @@ export class WhatsAppService {
   private recovery: RecoveryManager;
   private autoDownload!: AutoDownloadManager;
   private storage!: StorageWriter;
+  private contactPresenter!: ContactPresenter;
 
   constructor() {
     const baseDir =
@@ -99,6 +101,10 @@ export class WhatsAppService {
     this.storage = new StorageWriter({
       storeService: this.storeService,
       getOwnJid: () => this.ownJid,
+    });
+    this.contactPresenter = new ContactPresenter({
+      storeService: this.storeService,
+      jidResolver: this.jidResolver,
     });
     const autoDownloadMaxMbRaw = Number(process.env.AUTO_DOWNLOAD_MAX_MB);
     this.autoDownload = new AutoDownloadManager(
@@ -136,7 +142,7 @@ export class WhatsAppService {
       getRelatedJids: (jid) => this.jidResolver.getRelatedJids(jid),
       normalizeJid: (jid) => JidResolver.normalizeJid(jid),
       normalizePnNumber: (jid) => JidResolver.normalizePnNumber(jid),
-      getContactSummary: (jid) => this.getContactSummary(jid),
+      getContactSummary: (jid) => this.contactPresenter.getContactSummary(jid),
     });
     this.idempotency = new IdempotencyManager(this.storeService, {
       sendDedupWindowMs: Number(process.env.WA_SEND_DEDUP_WINDOW_MS) || 45000,
@@ -212,161 +218,6 @@ export class WhatsAppService {
     }
   }
 
-  private getContactSummary(jid: string): {
-    name: string | null;
-    pushname: string | null;
-    number: string | null;
-    is_my_contact: boolean | null;
-  } | null {
-    if (!this.storeService || !jid) return null;
-    let contact = this.storeService.getContactById(jid);
-    if (!contact && JidResolver.isLidJid(jid)) {
-      const mapped = this.storeService.getPnForLid(jid);
-      if (mapped?.pnJid) {
-        contact = this.storeService.getContactById(mapped.pnJid);
-      }
-    }
-    if (!contact && JidResolver.isPnJid(jid)) {
-      const lid = this.storeService.getLidForPn(jid);
-      if (lid) {
-        contact = this.storeService.getContactById(lid);
-      }
-    }
-    if (!contact) return null;
-    return {
-      name: contact.name || null,
-      pushname: contact.pushname || null,
-      number: contact.number || null,
-      is_my_contact: contact.is_my_contact ? true : false,
-    };
-  }
-
-  private getBestContactName(jid: string): string | null {
-    const summary = this.getContactSummary(jid);
-    if (!summary) return null;
-    const candidates = [summary.name, summary.pushname, summary.number];
-    for (const candidate of candidates) {
-      if (this.isUsableDisplayName(candidate, jid)) {
-        return candidate!;
-      }
-    }
-    return null;
-  }
-
-  private getBestChatName(
-    related: string[],
-    canonicalId: string,
-    storedName: string | null | undefined,
-  ): string | null {
-    if (canonicalId.endsWith("@g.us")) {
-      const groupName = this.getBestGroupName(related, canonicalId, storedName);
-      if (groupName) return groupName;
-    }
-    if (this.isUsableDisplayName(storedName, canonicalId)) return storedName!;
-    for (const jid of related) {
-      const name = this.getBestContactName(jid);
-      if (name) return name;
-    }
-    const fallback = this.getBestContactName(canonicalId);
-    if (fallback) return fallback;
-    if (JidResolver.isPnJid(canonicalId)) {
-      const pn = JidResolver.normalizePnNumber(canonicalId);
-      if (pn) return pn;
-    }
-    return this.isUsableDisplayName(storedName, canonicalId)
-      ? storedName!
-      : null;
-  }
-
-  private getBestGroupName(
-    related: string[],
-    canonicalId: string,
-    storedName: string | null | undefined,
-  ): string | null {
-    const candidates = [storedName];
-    if (this.storeService) {
-      for (const jid of [canonicalId, ...related]) {
-        const meta = this.storeService.getGroupMeta(jid);
-        if (meta?.subject) {
-          candidates.push(meta.subject);
-        }
-      }
-    }
-    for (const candidate of candidates) {
-      if (this.isUsableDisplayName(candidate, canonicalId)) {
-        return candidate!;
-      }
-    }
-    return null;
-  }
-
-  private isUsableDisplayName(
-    value: string | null | undefined,
-    canonicalId?: string,
-  ): boolean {
-    if (!value) return false;
-    const trimmed = String(value).trim();
-    if (!trimmed) return false;
-    if (trimmed === canonicalId) return false;
-    if (JidResolver.isLidJid(trimmed)) return false;
-    return true;
-  }
-
-  private buildSimpleContact(
-    contact: any,
-    canonicalId?: string,
-  ): SimpleContact {
-    const jid = contact?.jid || contact?.id || "";
-    const id = canonicalId || jid;
-    const number =
-      contact?.number ||
-      JidResolver.normalizePnNumber(jid) ||
-      JidResolver.normalizePnNumber(canonicalId || "") ||
-      "";
-    return {
-      id,
-      name: contact?.name || null,
-      pushname: contact?.pushname || null,
-      isMe: false,
-      isUser: true,
-      isGroup: Boolean(contact?.is_group),
-      isWAContact: true,
-      isMyContact: Boolean(contact?.is_my_contact),
-      number,
-    };
-  }
-
-  private mergeContacts(contacts: any[]): SimpleContact[] {
-    const merged = new Map<string, SimpleContact>();
-    for (const contact of contacts) {
-      const jid = contact?.jid || contact?.id || "";
-      if (!jid) continue;
-      const canonicalId = this.jidResolver.resolveCanonicalChatId(jid);
-      const entry = this.buildSimpleContact(contact, canonicalId);
-      const existing = merged.get(canonicalId);
-      if (!existing) {
-        merged.set(canonicalId, entry);
-        continue;
-      }
-      const name =
-        existing.name && existing.name !== existing.id
-          ? existing.name
-          : entry.name && entry.name !== entry.id
-            ? entry.name
-            : existing.name || entry.name;
-      const pushname = existing.pushname || entry.pushname;
-      const number = existing.number || entry.number;
-      merged.set(canonicalId, {
-        ...existing,
-        name,
-        pushname,
-        number,
-        isMyContact: existing.isMyContact || entry.isMyContact,
-      });
-    }
-    return Array.from(merged.values());
-  }
-
   private getCachedGroupInfo(groupJid: string): any | null {
     if (!this.storeService) return null;
     const meta = this.storeService.getGroupMeta(groupJid);
@@ -381,7 +232,9 @@ export class WhatsAppService {
       creation: meta.creation,
       desc: meta.desc,
       participants: participants.map((p: StoredGroupParticipant) => {
-        const contact = this.getContactSummary(p.participant_jid);
+        const contact = this.contactPresenter.getContactSummary(
+          p.participant_jid,
+        );
         return {
           id: p.participant_jid,
           admin: p.admin,
@@ -1189,7 +1042,7 @@ export class WhatsAppService {
           const lastMessage = includeLastMessage
             ? this.getLastMessageForChat(chat.id)
             : undefined;
-          const fallbackName = this.getBestChatName(
+          const fallbackName = this.contactPresenter.getBestChatName(
             related,
             canonicalId,
             chat.name,
@@ -1322,7 +1175,11 @@ export class WhatsAppService {
         const stored = this.storeService.getChatById(entry);
         if (!stored) continue;
         const canonicalId = this.jidResolver.resolveCanonicalChatId(stored.id);
-        const name = this.getBestChatName(related, canonicalId, stored.name);
+        const name = this.contactPresenter.getBestChatName(
+          related,
+          canonicalId,
+          stored.name,
+        );
         const candidate: SimpleChat = {
           id: canonicalId,
           name: name || stored.name,
@@ -1501,7 +1358,9 @@ export class WhatsAppService {
                 String(pn),
               );
             }
-            const contact = jid ? this.getContactSummary(jid) : null;
+            const contact = jid
+              ? this.contactPresenter.getContactSummary(jid)
+              : null;
             return {
               ...p,
               ...(contact || {}),
@@ -1823,7 +1682,7 @@ export class WhatsAppService {
   async searchContacts(query: string): Promise<SimpleContact[]> {
     if (this.storeService) {
       const stored = this.storeService.searchContacts(query, 50);
-      return this.mergeContacts(stored);
+      return this.contactPresenter.mergeContacts(stored);
     }
 
     return [];
@@ -1837,7 +1696,7 @@ export class WhatsAppService {
     const hasDigits = digits.length >= 6;
 
     const contacts = this.storeService
-      ? this.mergeContacts(this.storeService.listContacts(200))
+      ? this.contactPresenter.mergeContacts(this.storeService.listContacts(200))
       : [];
     const scored = contacts.map((contact) => {
       const mapped = mapContact(contact);
@@ -1931,7 +1790,10 @@ export class WhatsAppService {
       }
       if (!contact) return null;
       const canonicalId = this.jidResolver.resolveCanonicalChatId(contact.jid);
-      const mapped = this.buildSimpleContact(contact, canonicalId);
+      const mapped = this.contactPresenter.buildSimpleContact(
+        contact,
+        canonicalId,
+      );
       if (!mapped.number && JidResolver.isLidJid(contact.jid)) {
         const pn = this.storeService.getPnForLid(contact.jid);
         if (pn?.pnNumber) {
