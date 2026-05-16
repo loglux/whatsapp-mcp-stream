@@ -26,7 +26,7 @@ import {
 import { WhatsAppSync } from "./whatsapp-sync.js";
 import { GroupAuditEngine } from "./group-audit.js";
 import { IdempotencyManager } from "./idempotency-manager.js";
-import { setBoundedMapEntry } from "../utils/bounded-map.js";
+import { MessageIndexStore } from "./message-index-store.js";
 
 import {
   ALL_WA_PATCH_NAMES,
@@ -48,9 +48,7 @@ export class WhatsAppService {
   private isReadyFlag = false;
   private initializing: Promise<void> | null = null;
   private reconnecting = false;
-  private messageIndex = new Map<string, any>();
-  private messagesByChat = new Map<string, any[]>();
-  private messageKeyIndex = new Map<string, any>();
+  private readonly messageIndexStore: MessageIndexStore;
   private sessionReplaced = false;
   private lastDisconnectReason: string | null = null;
   private lastDisconnectAt: number | null = null;
@@ -58,14 +56,6 @@ export class WhatsAppService {
   private reconnectAttempts = 0;
   private disconnectRecoveryTimer: NodeJS.Timeout | null = null;
   private disconnectRecoveryInProgress = false;
-  private readonly maxMessageIndexSize = Math.max(
-    1000,
-    Number(process.env.WA_MESSAGE_INDEX_MAX || 20000) || 20000,
-  );
-  private readonly maxMessageKeyIndexSize = Math.max(
-    1000,
-    Number(process.env.WA_MESSAGE_KEY_INDEX_MAX || 20000) || 20000,
-  );
   private sessionDir: string;
   private storeService: StoreService | null = null;
   private client: BaileysClient;
@@ -121,6 +111,16 @@ export class WhatsAppService {
       process.env.SESSION_DIR ||
       path.join(process.cwd(), "whatsapp-sessions", "baileys");
     this.sessionDir = baseDir;
+    this.messageIndexStore = new MessageIndexStore({
+      maxIndexSize: Math.max(
+        1000,
+        Number(process.env.WA_MESSAGE_INDEX_MAX) || 20000,
+      ),
+      maxKeyIndexSize: Math.max(
+        1000,
+        Number(process.env.WA_MESSAGE_KEY_INDEX_MAX) || 20000,
+      ),
+    });
     this.client = new BaileysClient(this.sessionDir, (event) =>
       this.handleBaileysLogEvent(event),
     );
@@ -196,7 +196,7 @@ export class WhatsAppService {
     const payload = this.getMediaPayload(msg.message);
     if (!payload) return;
 
-    const messageId = this.serializeMessageId(msg);
+    const messageId = MessageIndexStore.serializeMessageId(msg);
     if (this.storeService) {
       const existing = this.storeService.getMediaByMessageId(messageId);
       if (existing) return;
@@ -505,21 +505,9 @@ export class WhatsAppService {
     return normalized;
   }
 
-  private serializeMessageId(msg: any): string {
-    const jid = msg?.key?.remoteJid || msg?.key?.remoteJidAlt || "unknown";
-    const id = msg?.key?.id || "unknown";
-    return `${jid}:${id}`;
-  }
-
-  private serializeKeyId(key: any): string {
-    const jid = key?.remoteJid || key?.remoteJidAlt || "unknown";
-    const id = key?.id || "unknown";
-    return `${jid}:${id}`;
-  }
-
   private upsertStoredMessage(msg: any): void {
     if (!this.storeService) return;
-    const mapped = mapMessage(msg, this.serializeMessageId.bind(this));
+    const mapped = mapMessage(msg, MessageIndexStore.serializeMessageId);
     const record: StoredMessage = {
       id: mapped.id,
       chat_jid: mapped.to,
@@ -536,7 +524,7 @@ export class WhatsAppService {
 
   private updateStoredMessageContent(msg: any): void {
     if (!this.storeService) return;
-    const mapped = mapMessage(msg, this.serializeMessageId.bind(this));
+    const mapped = mapMessage(msg, MessageIndexStore.serializeMessageId);
     const changes = this.storeService.updateMessageContent(
       mapped.id,
       mapped.body || "",
@@ -804,26 +792,8 @@ export class WhatsAppService {
   }
 
   private trackMessage(msg: any): void {
-    const id = this.serializeMessageId(msg);
-    setBoundedMapEntry(this.messageIndex, id, msg, this.maxMessageIndexSize);
-    const keyId = msg?.key?.id;
-    if (keyId) {
-      setBoundedMapEntry(
-        this.messageKeyIndex,
-        keyId,
-        msg,
-        this.maxMessageKeyIndexSize,
-      );
-    }
-    const jid = msg?.key?.remoteJid;
-    if (!jid) return;
+    this.messageIndexStore.add(msg);
     this.storeLidMappingFromKey(msg?.key);
-    const list = this.messagesByChat.get(jid) || [];
-    list.push(msg);
-    if (list.length > 500) {
-      list.splice(0, list.length - 500);
-    }
-    this.messagesByChat.set(jid, list);
   }
 
   executeIdempotentOperation<T>(
@@ -878,7 +848,9 @@ export class WhatsAppService {
     this.initializing = (async () => {
       log.info("Initializing WhatsApp client");
       await this.client.initialize(async (key: any) => {
-        const cached = key?.id ? this.messageKeyIndex.get(key.id) : undefined;
+        const cached = key?.id
+          ? this.messageIndexStore.getByKeyId(key.id)
+          : undefined;
         return cached?.message;
       });
 
@@ -1050,22 +1022,17 @@ export class WhatsAppService {
             update?.key?.remoteJid && update?.key?.id
               ? `${update.key.remoteJid}:${update.key.id}`
               : null;
-          if (key && this.messageIndex.has(key)) {
-            const existing = this.messageIndex.get(key);
-            const merged = {
-              ...existing,
-              ...update.update,
-              message: {
-                ...(existing.message || {}),
-                ...(update.update?.message || {}),
-              },
-            };
-            setBoundedMapEntry(
-              this.messageIndex,
-              key,
-              merged,
-              this.maxMessageIndexSize,
-            );
+          const merged = key
+            ? this.messageIndexStore.updateById(key, (existing) => ({
+                ...existing,
+                ...update.update,
+                message: {
+                  ...(existing.message || {}),
+                  ...(update.update?.message || {}),
+                },
+              }))
+            : undefined;
+          if (merged) {
             if (update.update?.message) {
               this.updateStoredMessageContent(merged);
             }
@@ -1090,23 +1057,14 @@ export class WhatsAppService {
         if (!updates) return;
         for (const update of updates) {
           const key = update?.key;
-          const msgId = this.serializeKeyId(key);
-          if (this.messageIndex.has(msgId)) {
-            const existing = this.messageIndex.get(msgId);
-            const merged = {
-              ...existing,
-              media: {
-                ...(existing.media || {}),
-                ...(update.media || {}),
-              },
-            };
-            setBoundedMapEntry(
-              this.messageIndex,
-              msgId,
-              merged,
-              this.maxMessageIndexSize,
-            );
-          }
+          const msgId = MessageIndexStore.serializeKeyId(key);
+          this.messageIndexStore.updateById(msgId, (existing) => ({
+            ...existing,
+            media: {
+              ...(existing.media || {}),
+              ...(update.media || {}),
+            },
+          }));
         }
       });
 
@@ -1117,23 +1075,14 @@ export class WhatsAppService {
         if (!updates) return;
         for (const update of updates) {
           const key = update?.key;
-          const msgId = this.serializeKeyId(key);
-          if (this.messageIndex.has(msgId)) {
-            const existing = this.messageIndex.get(msgId);
-            const reaction = update?.reaction;
-            const merged = {
-              ...existing,
-              reactions: reaction
-                ? [...(existing.reactions || []), reaction]
-                : existing.reactions,
-            };
-            setBoundedMapEntry(
-              this.messageIndex,
-              msgId,
-              merged,
-              this.maxMessageIndexSize,
-            );
-          }
+          const msgId = MessageIndexStore.serializeKeyId(key);
+          const reaction = update?.reaction;
+          this.messageIndexStore.updateById(msgId, (existing) => ({
+            ...existing,
+            reactions: reaction
+              ? [...(existing.reactions || []), reaction]
+              : existing.reactions,
+          }));
           if (this.storeService) {
             try {
               this.storeService.insertMessageReaction(
@@ -1154,23 +1103,14 @@ export class WhatsAppService {
         if (!updates) return;
         for (const update of updates) {
           const key = update?.key;
-          const msgId = this.serializeKeyId(key);
-          if (this.messageIndex.has(msgId)) {
-            const existing = this.messageIndex.get(msgId);
-            const receipts = update?.receipt;
-            const merged = {
-              ...existing,
-              receipts: receipts
-                ? [...(existing.receipts || []), receipts]
-                : existing.receipts,
-            };
-            setBoundedMapEntry(
-              this.messageIndex,
-              msgId,
-              merged,
-              this.maxMessageIndexSize,
-            );
-          }
+          const msgId = MessageIndexStore.serializeKeyId(key);
+          const receipts = update?.receipt;
+          this.messageIndexStore.updateById(msgId, (existing) => ({
+            ...existing,
+            receipts: receipts
+              ? [...(existing.receipts || []), receipts]
+              : existing.receipts,
+          }));
           if (this.storeService) {
             try {
               this.storeService.insertMessageReceipt(
@@ -1195,7 +1135,7 @@ export class WhatsAppService {
           if (this.storeService) {
             this.storeService.deleteMessagesByChat(payload.jid);
           }
-          this.messagesByChat.delete(payload.jid);
+          this.messageIndexStore.deleteByChat(payload.jid);
           return;
         }
         const keys = payload.keys || [];
@@ -1204,13 +1144,7 @@ export class WhatsAppService {
           const id = key?.id;
           if (!jid || !id) continue;
           const msgId = `${jid}:${id}`;
-          this.messageIndex.delete(msgId);
-          this.messageKeyIndex.delete(id);
-          const list = this.messagesByChat.get(jid);
-          if (list?.length) {
-            const filtered = list.filter((msg: any) => msg?.key?.id !== id);
-            this.messagesByChat.set(jid, filtered);
-          }
+          this.messageIndexStore.deleteByKey(key);
           if (this.storeService) {
             this.storeService.deleteMessageById(msgId);
           }
@@ -1445,7 +1379,7 @@ export class WhatsAppService {
     warmupInProgress: boolean;
   } {
     const chatCount = this.getChatCount();
-    const messageCount = this.messageIndex.size;
+    const messageCount = this.messageIndexStore.messageCount;
     const syncStats = this.sync.getStats();
     return {
       chatCount,
@@ -1668,12 +1602,12 @@ export class WhatsAppService {
       const stats = this.storeService.stats();
       if (stats) return stats.chats;
     }
-    return this.messagesByChat.size;
+    return this.messageIndexStore.chatCount;
   }
 
   async runWarmup(): Promise<{ chatCount: number; messageCount: number }> {
     return this.sync.runWarmup(
-      () => this.messageIndex.size,
+      () => this.messageIndexStore.messageCount,
       () => this.forceResync(),
     );
   }
@@ -1752,7 +1686,7 @@ export class WhatsAppService {
     }
 
     await this.sync.warmup(() => this.forceResync());
-    const chatIds = Array.from(this.messagesByChat.keys());
+    const chatIds = this.messageIndexStore.chatJids();
     if (chatIds.length > 0) {
       const merged = new Map<string, SimpleChat>();
       for (const jid of chatIds) {
@@ -1882,8 +1816,8 @@ export class WhatsAppService {
     const related = this.getRelatedJids(jid);
     const perLimit = related.length > 1 ? Math.max(limit * 2, 100) : limit;
     const fromMemory = related.flatMap((entry) =>
-      (this.messagesByChat.get(entry) || []).map((msg) =>
-        mapMessage(msg, this.serializeMessageId.bind(this)),
+      (this.messageIndexStore.listByChat(entry) || []).map((msg) =>
+        mapMessage(msg, MessageIndexStore.serializeMessageId),
       ),
     );
     const store = this.storeService;
@@ -1943,13 +1877,13 @@ export class WhatsAppService {
 
     const searchRawList = (msgs: any[]) => {
       for (const msg of msgs) {
-        pushIfMatch(mapMessage(msg, this.serializeMessageId.bind(this)));
+        pushIfMatch(mapMessage(msg, MessageIndexStore.serializeMessageId));
       }
     };
 
     if (chatId) {
       const normalized = this.resolveLookupJid(chatId);
-      const list = this.messagesByChat.get(normalized) || [];
+      const list = this.messageIndexStore.listByChat(normalized) || [];
       if (list.length > 0) {
         searchRawList(list);
       }
@@ -1963,7 +1897,7 @@ export class WhatsAppService {
         }
       }
     } else {
-      const all = Array.from(this.messageIndex.values());
+      const all = Array.from(this.messageIndexStore.messages());
       searchRawList(all);
     }
 
@@ -1977,9 +1911,9 @@ export class WhatsAppService {
   }
 
   async getMessageById(messageId: string): Promise<SimpleMessage | null> {
-    const msg = this.messageIndex.get(messageId);
+    const msg = this.messageIndexStore.getById(messageId);
     if (msg) {
-      return mapMessage(msg, this.serializeMessageId.bind(this));
+      return mapMessage(msg, MessageIndexStore.serializeMessageId);
     }
     if (this.storeService) {
       const stored = this.storeService.getMessageById(messageId);
@@ -2247,13 +2181,13 @@ export class WhatsAppService {
   }
 
   async downloadMedia(messageId: string): Promise<DownloadedMedia | null> {
-    let msg = this.messageIndex.get(messageId);
+    let msg = this.messageIndexStore.getById(messageId);
     if (!msg?.message) {
       const parts = messageId.split(":");
       if (parts.length >= 2) {
         const jid = parts[0];
         const keyId = parts.slice(1).join(":");
-        const list = this.messagesByChat.get(jid) || [];
+        const list = this.messageIndexStore.listByChat(jid) || [];
         msg = list.find((m: any) => m?.key?.id === keyId);
         if (msg) {
           this.trackMessage(msg);
@@ -2476,12 +2410,12 @@ export class WhatsAppService {
     }
     const related = this.getRelatedJids(jid);
     for (const entry of related) {
-      const list = this.messagesByChat.get(entry) || [];
+      const list = this.messageIndexStore.listByChat(entry) || [];
       const last = list[list.length - 1];
       if (last) {
         candidates.push(
           this.normalizeSimpleMessageId(
-            mapMessage(last, this.serializeMessageId.bind(this)),
+            mapMessage(last, MessageIndexStore.serializeMessageId),
             canonicalId,
           ),
         );
