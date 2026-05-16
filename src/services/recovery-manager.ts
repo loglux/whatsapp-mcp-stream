@@ -41,6 +41,20 @@ const DEFAULT_DISCONNECT_RESTART_CODES = [428];
 const DEFAULT_RESYNC_RECONNECT_DELAY_MS = 15_000;
 const DEFAULT_READINESS_GRACE_MS = 180_000;
 
+/**
+ * Owns disconnect/sync-recovery state and schedules the recovery actions.
+ *
+ * **Deadlock invariant (load-bearing):** every recovery path that ends up
+ * touching the WhatsApp lifecycle must run `destroyInternal` and
+ * `initializeWithinLifecycleLock` *inside* `withLifecycleLock`. Never call the
+ * deps' `initialize()` public entrypoint here (and avoid escalating to
+ * `restart()` from within an already-locked section) — `initialize()`
+ * re-acquires the same lifecycle lock and the recovery hangs forever. A real
+ * production outage was caused by exactly that pattern; the fix was to route
+ * recovery through `initializeWithinLifecycleLock`. The deps-callback wiring
+ * is what keeps this invariant: don't replace it with direct
+ * `WhatsAppService.*` calls.
+ */
 export class RecoveryManager {
   readonly syncRecoveryCooldownMs: number;
   readonly syncRecoveryWindowMs: number;
@@ -264,6 +278,9 @@ export class RecoveryManager {
         "Starting WhatsApp reconnect",
       );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
+      // Critical: stay inside withLifecycleLock and use the *within-lock*
+      // initializer. Calling deps.initialize() here would re-acquire the
+      // same lock and deadlock. See class docstring.
       await this.deps.withLifecycleLock(async () => {
         log.info("Reconnect: destroying current WhatsApp client");
         await this.deps.destroyInternal();
