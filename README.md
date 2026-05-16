@@ -215,6 +215,9 @@ Environment variables:
 | `WA_IDEMPOTENCY_TTL_MS` | `86400000` | How long completed `send_message` idempotency records are retained in SQLite for safe retries. |
 | `WA_MESSAGE_INDEX_MAX` | `20000` | Max in-memory entries for message index (`jid:id` -> raw message). |
 | `WA_MESSAGE_KEY_INDEX_MAX` | `20000` | Max in-memory entries for message key index (`id` -> raw message). |
+| `WA_INITIALIZE_TIMEOUT_MS` | `120000` | Race the WhatsApp client initialise against this deadline; set to `0` to disable. Throws on timeout so recovery can retry instead of hanging. |
+| `WA_AUTO_DOWNLOAD_CONCURRENCY` | `3` | Max parallel auto-downloads. Auto-download runs through an in-process bounded queue so a burst of inbound media cannot saturate the I/O. |
+| `WA_AUTO_DOWNLOAD_QUEUE_MAX` | `200` | Max queued auto-download jobs. Excess is dropped FIFO (oldest first) with a warning log; recent messages stay prioritised. |
 | `MCP_HTTP_ENABLE_JSON_RESPONSE` | `1` | Use direct JSON responses for Streamable HTTP POST requests by default. Set to `0` to force the older SSE-style POST response handling. |
 
 Additional transport diagnostics:
