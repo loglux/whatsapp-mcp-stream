@@ -34,8 +34,8 @@ import { IdempotencyManager } from "./idempotency-manager.js";
 import { MessageIndexStore } from "./message-index-store.js";
 import { JidResolver } from "./jid-resolver.js";
 import { RecoveryManager } from "./recovery-manager.js";
-import { ConcurrencyQueue } from "../utils/concurrency-queue.js";
 import { withTimeout } from "../utils/with-timeout.js";
+import { AutoDownloadManager } from "./auto-download-manager.js";
 
 import {
   ALL_WA_PATCH_NAMES,
@@ -80,28 +80,13 @@ export class WhatsAppService {
   private idempotency: IdempotencyManager;
   private jidResolver: JidResolver;
   private recovery: RecoveryManager;
-  private readonly autoDownloadQueue: ConcurrencyQueue;
+  private autoDownload!: AutoDownloadManager;
 
   constructor() {
     const baseDir =
       process.env.SESSION_DIR ||
       path.join(process.cwd(), "whatsapp-sessions", "baileys");
     this.sessionDir = baseDir;
-    this.autoDownloadQueue = new ConcurrencyQueue({
-      concurrency: Math.max(
-        1,
-        Number(process.env.WA_AUTO_DOWNLOAD_CONCURRENCY) || 3,
-      ),
-      maxQueued: Math.max(
-        0,
-        Number(process.env.WA_AUTO_DOWNLOAD_QUEUE_MAX) || 200,
-      ),
-      onDrop: (queueSize) =>
-        log.warn(
-          { queueSize },
-          "Auto-download backlog overflow; dropped oldest pending job",
-        ),
-    });
     this.messageIndexStore = new MessageIndexStore({
       maxIndexSize: Math.max(
         1000,
@@ -118,6 +103,24 @@ export class WhatsAppService {
     this.initStoreService();
     this.storeService?.deleteExpiredIdempotencyRecords();
     this.jidResolver = new JidResolver(this.storeService);
+    const autoDownloadMaxMbRaw = Number(process.env.AUTO_DOWNLOAD_MAX_MB);
+    this.autoDownload = new AutoDownloadManager(
+      {
+        storeService: this.storeService,
+        downloadMedia: (messageId: string) => this.downloadMedia(messageId),
+      },
+      {
+        enabled: ["true", "1"].includes(
+          (process.env.AUTO_DOWNLOAD_MEDIA || "").toLowerCase(),
+        ),
+        maxBytes:
+          Number.isFinite(autoDownloadMaxMbRaw) && autoDownloadMaxMbRaw > 0
+            ? autoDownloadMaxMbRaw * 1024 * 1024
+            : null,
+        concurrency: Number(process.env.WA_AUTO_DOWNLOAD_CONCURRENCY) || 3,
+        maxQueued: Number(process.env.WA_AUTO_DOWNLOAD_QUEUE_MAX) || 200,
+      },
+    );
     this.sync = new WhatsAppSync(
       this.storeService,
       () => this.getSocketOptional(),
@@ -186,81 +189,6 @@ export class WhatsAppService {
         ),
       },
     );
-  }
-
-  private isAutoDownloadEnabled(): boolean {
-    const value = (process.env.AUTO_DOWNLOAD_MEDIA || "").toLowerCase();
-    return value === "true" || value === "1";
-  }
-
-  private getAutoDownloadMaxBytes(): number | null {
-    const raw = process.env.AUTO_DOWNLOAD_MAX_MB;
-    if (!raw) return null;
-    const mb = Number(raw);
-    if (!Number.isFinite(mb) || mb <= 0) return null;
-    return mb * 1024 * 1024;
-  }
-
-  private getMediaPayload(message: any): {
-    type: "image" | "video" | "audio" | "document" | "sticker";
-    content: any;
-  } | null {
-    if (!message) return null;
-    if (message.imageMessage) {
-      return { type: "image", content: message.imageMessage };
-    }
-    if (message.videoMessage) {
-      return { type: "video", content: message.videoMessage };
-    }
-    if (message.audioMessage) {
-      return { type: "audio", content: message.audioMessage };
-    }
-    if (message.documentMessage) {
-      return { type: "document", content: message.documentMessage };
-    }
-    if (message.stickerMessage) {
-      return { type: "sticker", content: message.stickerMessage };
-    }
-    return null;
-  }
-
-  private async maybeAutoDownloadMedia(msg: any): Promise<void> {
-    if (!this.isAutoDownloadEnabled()) return;
-    if (!msg?.message) return;
-    const jid = msg?.key?.remoteJid;
-    if (jid === "status@broadcast") return;
-
-    const payload = this.getMediaPayload(msg.message);
-    if (!payload) return;
-
-    const messageId = MessageIndexStore.serializeMessageId(msg);
-    if (this.storeService) {
-      const existing = this.storeService.getMediaByMessageId(messageId);
-      if (existing) return;
-    }
-
-    const maxBytes = this.getAutoDownloadMaxBytes();
-    const rawSize =
-      payload.content?.fileLength ??
-      payload.content?.fileSize ??
-      payload.content?.fileLength?.toNumber?.() ??
-      payload.content?.fileSize?.toNumber?.();
-    const size = rawSize ? Number(rawSize) : null;
-    if (maxBytes && size && size > maxBytes) {
-      log.info(
-        { messageId, size, maxBytes },
-        "Skipping auto-download: media too large",
-      );
-      return;
-    }
-
-    this.autoDownloadQueue.enqueue(async () => {
-      try {
-        await this.downloadMedia(messageId);
-      } catch (error) {
-        log.warn({ err: error, messageId }, "Auto-download media failed");
-      }
-    });
   }
 
   private initStoreService(): void {
@@ -816,7 +744,7 @@ export class WhatsAppService {
               conversationTimestamp: msg?.messageTimestamp,
             });
           }
-          void this.maybeAutoDownloadMedia(msg);
+          this.autoDownload.maybeProcess(msg);
         }
       });
 
