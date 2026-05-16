@@ -24,6 +24,58 @@ function findFfmpegPath(): string | null {
   return null;
 }
 
+let cachedAllowedRoots: string[] | null = null;
+function getAllowedFfmpegRoots(): string[] {
+  if (cachedAllowedRoots) return cachedAllowedRoots;
+  const roots: string[] = [];
+  if (process.env.MEDIA_DIR) {
+    try {
+      roots.push(fs.realpathSync(process.env.MEDIA_DIR));
+    } catch {
+      roots.push(path.resolve(process.env.MEDIA_DIR));
+    }
+  }
+  try {
+    roots.push(fs.realpathSync(os.tmpdir()));
+  } catch {
+    roots.push(path.resolve(os.tmpdir()));
+  }
+  cachedAllowedRoots = roots;
+  return roots;
+}
+
+function assertSafeFfmpegInput(inputPath: string): string {
+  if (typeof inputPath !== "string" || inputPath.length === 0) {
+    throw new Error("ffmpeg input path must be a non-empty string");
+  }
+  // Reject paths ffmpeg would parse as a CLI option (leading '-' is a flag, not a file).
+  if (inputPath.startsWith("-")) {
+    throw new Error(`ffmpeg input path must not start with '-': ${inputPath}`);
+  }
+  if (!path.isAbsolute(inputPath)) {
+    throw new Error(`ffmpeg input path must be absolute: ${inputPath}`);
+  }
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(inputPath);
+  } catch {
+    throw new Error(
+      `ffmpeg input file not found or not accessible: ${inputPath}`,
+    );
+  }
+  const roots = getAllowedFfmpegRoots();
+  const within = roots.some((root) => {
+    const rel = path.relative(root, resolved);
+    return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  });
+  if (!within) {
+    throw new Error(
+      `ffmpeg input path is outside allowed roots (MEDIA_DIR, tmpdir): ${resolved}`,
+    );
+  }
+  return resolved;
+}
+
 export class AudioUtils {
   /**
    * Convert an audio file to Opus format in an Ogg container using ffmpeg.
@@ -52,20 +104,24 @@ export class AudioUtils {
           );
         }
       }
-      if (!fs.existsSync(inputPath)) {
-        return reject(new Error(`Input file not found: ${inputPath}`));
+      let safeInputPath: string;
+      try {
+        safeInputPath = assertSafeFfmpegInput(inputPath);
+      } catch (err) {
+        return reject(err instanceof Error ? err : new Error(String(err)));
       }
 
-      const finalOutputPath = outputPath || `${path.parse(inputPath).name}.ogg`;
+      const finalOutputPath =
+        outputPath || `${path.parse(safeInputPath).name}.ogg`;
       const outputDir = path.dirname(finalOutputPath);
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
 
       log.debug(
-        `Starting ffmpeg conversion: ${inputPath} -> ${finalOutputPath}`,
+        `Starting ffmpeg conversion: ${safeInputPath} -> ${finalOutputPath}`,
       );
-      ffmpeg(inputPath)
+      ffmpeg(safeInputPath)
         .audioCodec("libopus")
         .audioBitrate(bitrate)
         .audioFrequency(sampleRate)
