@@ -28,6 +28,7 @@ import { GroupAuditEngine } from "./group-audit.js";
 import { IdempotencyManager } from "./idempotency-manager.js";
 import { MessageIndexStore } from "./message-index-store.js";
 import { JidResolver } from "./jid-resolver.js";
+import { RecoveryManager } from "./recovery-manager.js";
 
 import {
   ALL_WA_PATCH_NAMES,
@@ -47,15 +48,8 @@ export class WhatsAppService {
   private isAuthenticatedFlag = false;
   private isReadyFlag = false;
   private initializing: Promise<void> | null = null;
-  private reconnecting = false;
   private readonly messageIndexStore: MessageIndexStore;
-  private sessionReplaced = false;
-  private lastDisconnectReason: string | null = null;
-  private lastDisconnectAt: number | null = null;
   private lifecycleLock: Promise<void> = Promise.resolve();
-  private reconnectAttempts = 0;
-  private disconnectRecoveryTimer: NodeJS.Timeout | null = null;
-  private disconnectRecoveryInProgress = false;
   private sessionDir: string;
   private storeService: StoreService | null = null;
   private client: BaileysClient;
@@ -67,45 +61,10 @@ export class WhatsAppService {
   private readonly eventStreamPath =
     process.env.WA_EVENT_STREAM_PATH || "/app/wa-events.log";
   private eventStreamWriter: fs.WriteStream | null = null;
-  private readonly resyncReconnectEnabled =
-    (process.env.WA_RESYNC_RECONNECT || "1").toLowerCase() === "1";
-  private readonly resyncReconnectDelayMs = Number(
-    process.env.WA_RESYNC_RECONNECT_DELAY_MS || 15000,
-  );
-  private syncRecoveryInProgress = false;
-  private syncRecoveryAttempts = 0;
-  private lastSyncFailureAt: number | null = null;
-  private lastRecoveryAt: number | null = null;
-  private lastRecoveryReason: string | null = null;
-  private readonly syncRecoveryCooldownMs = Math.max(
-    30000,
-    Number(process.env.WA_SYNC_RECOVERY_COOLDOWN_MS || 300000) || 300000,
-  );
-  private readonly syncRecoveryWindowMs = Math.max(
-    60000,
-    Number(process.env.WA_SYNC_RECOVERY_WINDOW_MS || 900000) || 900000,
-  );
-  private readonly syncSoftRecoveryLimit = Math.max(
-    1,
-    Number(process.env.WA_SYNC_SOFT_RECOVERY_LIMIT || 2) || 2,
-  );
-  private readonly readinessGraceMs = Math.max(
-    30000,
-    Number(process.env.WA_READINESS_GRACE_MS || 180000) || 180000,
-  );
-  private readonly disconnectRecoveryDelayMs = Math.max(
-    5000,
-    Number(process.env.WA_DISCONNECT_RECOVERY_DELAY_MS || 30000) || 30000,
-  );
-  private readonly disconnectRecoveryRestartCodes = new Set<number>(
-    String(process.env.WA_DISCONNECT_RECOVERY_RESTART_CODES || "428")
-      .split(",")
-      .map((value) => Number(value.trim()))
-      .filter((value) => Number.isFinite(value)),
-  );
   private groupAudit: GroupAuditEngine;
   private idempotency: IdempotencyManager;
   private jidResolver: JidResolver;
+  private recovery: RecoveryManager;
 
   constructor() {
     const baseDir =
@@ -152,6 +111,50 @@ export class WhatsAppService {
       sendDedupWindowMs: Number(process.env.WA_SEND_DEDUP_WINDOW_MS) || 45000,
       idempotencyTtlMs: Number(process.env.WA_IDEMPOTENCY_TTL_MS) || 86400000,
     });
+    this.recovery = new RecoveryManager(
+      {
+        withLifecycleLock: (fn) => this.withLifecycleLock(fn),
+        destroyInternal: () => this.destroyInternal(),
+        initializeWithinLifecycleLock: () =>
+          this.initializeWithinLifecycleLock(),
+        forceResync: () => this.forceResync(),
+        restart: () => this.restart(),
+        isReady: () => this.isReadyFlag,
+      },
+      {
+        syncRecoveryCooldownMs: Math.max(
+          30000,
+          Number(process.env.WA_SYNC_RECOVERY_COOLDOWN_MS) || 300000,
+        ),
+        syncRecoveryWindowMs: Math.max(
+          60000,
+          Number(process.env.WA_SYNC_RECOVERY_WINDOW_MS) || 900000,
+        ),
+        syncSoftRecoveryLimit: Math.max(
+          1,
+          Number(process.env.WA_SYNC_SOFT_RECOVERY_LIMIT) || 2,
+        ),
+        disconnectRecoveryDelayMs: Math.max(
+          5000,
+          Number(process.env.WA_DISCONNECT_RECOVERY_DELAY_MS) || 30000,
+        ),
+        disconnectRecoveryRestartCodes: String(
+          process.env.WA_DISCONNECT_RECOVERY_RESTART_CODES || "428",
+        )
+          .split(",")
+          .map((value) => Number(value.trim()))
+          .filter((value) => Number.isFinite(value)),
+        resyncReconnectEnabled:
+          (process.env.WA_RESYNC_RECONNECT || "1").toLowerCase() === "1",
+        resyncReconnectDelayMs: Number(
+          process.env.WA_RESYNC_RECONNECT_DELAY_MS || 15000,
+        ),
+        readinessGraceMs: Math.max(
+          30000,
+          Number(process.env.WA_READINESS_GRACE_MS) || 180000,
+        ),
+      },
+    );
   }
 
   private isAutoDownloadEnabled(): boolean {
@@ -247,154 +250,8 @@ export class WhatsAppService {
       (combined.includes("failed to find key") &&
         combined.includes("decode mutation"))
     ) {
-      this.scheduleSyncRecovery(message);
+      this.recovery.scheduleSyncRecovery(message);
     }
-  }
-
-  private scheduleSyncRecovery(reason: string): void {
-    const now = Date.now();
-    if (
-      this.lastSyncFailureAt &&
-      now - this.lastSyncFailureAt > this.syncRecoveryWindowMs
-    ) {
-      this.syncRecoveryAttempts = 0;
-    }
-    this.lastSyncFailureAt = now;
-    this.syncRecoveryAttempts += 1;
-
-    if (this.syncRecoveryInProgress) {
-      log.warn(
-        { reason, attempts: this.syncRecoveryAttempts },
-        "App state recovery already in progress",
-      );
-      return;
-    }
-
-    if (
-      this.lastRecoveryAt &&
-      now - this.lastRecoveryAt < this.syncRecoveryCooldownMs
-    ) {
-      log.warn(
-        {
-          reason,
-          attempts: this.syncRecoveryAttempts,
-          cooldownMs: this.syncRecoveryCooldownMs,
-        },
-        "App state recovery skipped due to cooldown",
-      );
-      return;
-    }
-
-    this.syncRecoveryInProgress = true;
-    this.lastRecoveryAt = now;
-    this.lastRecoveryReason = reason;
-
-    const strategy =
-      this.syncRecoveryAttempts <= this.syncSoftRecoveryLimit
-        ? "force-resync"
-        : "restart";
-
-    setTimeout(() => {
-      void (async () => {
-        try {
-          if (strategy === "force-resync") {
-            log.warn(
-              { reason, attempts: this.syncRecoveryAttempts },
-              "Detected corrupted WhatsApp app state; forcing resync",
-            );
-            await this.forceResync();
-          } else {
-            log.warn(
-              { reason, attempts: this.syncRecoveryAttempts },
-              "Detected repeated app state corruption; restarting WhatsApp client",
-            );
-            await this.restart();
-          }
-        } catch (error) {
-          log.error(
-            {
-              err: error,
-              reason,
-              strategy,
-              attempts: this.syncRecoveryAttempts,
-            },
-            "Automatic app state recovery failed",
-          );
-        } finally {
-          this.syncRecoveryInProgress = false;
-        }
-      })();
-    }, 0);
-  }
-
-  private clearDisconnectRecoveryTimer(): void {
-    if (!this.disconnectRecoveryTimer) return;
-    clearTimeout(this.disconnectRecoveryTimer);
-    this.disconnectRecoveryTimer = null;
-  }
-
-  private scheduleDisconnectRecovery(
-    statusCode: number | undefined,
-    reasonText: string,
-  ): void {
-    this.clearDisconnectRecoveryTimer();
-
-    const normalizedReason = reasonText.toLowerCase();
-    const shouldRestart =
-      (typeof statusCode === "number" &&
-        this.disconnectRecoveryRestartCodes.has(statusCode)) ||
-      normalizedReason.includes("connection terminated");
-    const strategy = shouldRestart ? "restart" : "reconnect";
-
-    log.warn(
-      {
-        statusCode,
-        reason: reasonText,
-        strategy,
-        delayMs: this.disconnectRecoveryDelayMs,
-      },
-      "Scheduled disconnect recovery watchdog",
-    );
-
-    this.disconnectRecoveryTimer = setTimeout(() => {
-      this.disconnectRecoveryTimer = null;
-      if (this.isReadyFlag) {
-        log.info(
-          { statusCode, reason: reasonText, strategy },
-          "Skipping disconnect recovery because WhatsApp is already ready",
-        );
-        return;
-      }
-      if (this.disconnectRecoveryInProgress) {
-        log.warn(
-          { statusCode, reason: reasonText, strategy },
-          "Disconnect recovery watchdog skipped because recovery is already in progress",
-        );
-        return;
-      }
-
-      this.disconnectRecoveryInProgress = true;
-      void (async () => {
-        try {
-          log.warn(
-            { statusCode, reason: reasonText, strategy },
-            "Running disconnect recovery watchdog",
-          );
-          if (strategy === "restart") {
-            await this.restart();
-          } else {
-            await this.reconnect();
-          }
-        } catch (error) {
-          log.error(
-            { err: error, statusCode, reason: reasonText, strategy },
-            "Disconnect recovery watchdog failed",
-          );
-        } finally {
-          this.disconnectRecoveryInProgress = false;
-        }
-      })();
-    }, this.disconnectRecoveryDelayMs);
   }
 
   private upsertStoredMessage(msg: any): void {
@@ -816,12 +673,7 @@ export class WhatsAppService {
           this.isAuthenticatedFlag = true;
           this.isReadyFlag = true;
           this.latestQrCode = null;
-          this.sessionReplaced = false;
-          this.lastDisconnectReason = null;
-          this.lastDisconnectAt = null;
-          this.reconnectAttempts = 0;
-          this.clearDisconnectRecoveryTimer();
-          this.disconnectRecoveryInProgress = false;
+          this.recovery.markConnectionOpen();
           log.info("WhatsApp connection opened.");
           this.sync.scheduleWarmup(() => this.forceResync());
         }
@@ -832,19 +684,19 @@ export class WhatsAppService {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
           const reason = lastDisconnect?.error?.message;
           const reasonText = reason ? String(reason) : "";
-          this.lastDisconnectReason =
+          this.recovery.markDisconnect(
             reasonText ||
-            (typeof statusCode === "number" ? String(statusCode) : null);
-          this.lastDisconnectAt = Date.now();
+              (typeof statusCode === "number" ? String(statusCode) : null),
+          );
           if (
             statusCode === DisconnectReason.connectionReplaced ||
             reasonText.toLowerCase().includes("conflict") ||
             reasonText.toLowerCase().includes("replaced")
           ) {
-            this.sessionReplaced = true;
+            this.recovery.markSessionReplaced();
           }
           log.warn({ statusCode, reason }, "WhatsApp connection closed.");
-          this.scheduleDisconnectRecovery(statusCode, reasonText);
+          this.recovery.scheduleDisconnectRecovery(statusCode, reasonText);
           if (statusCode === DisconnectReason.loggedOut) {
             log.warn("WhatsApp logged out. Clearing session.");
             try {
@@ -852,9 +704,11 @@ export class WhatsAppService {
             } catch (_error) {
               // Ignore
             }
-            this.reconnect().catch((err) =>
-              log.error({ err }, "Failed to reconnect WhatsApp"),
-            );
+            this.recovery
+              .reconnect()
+              .catch((err) =>
+                log.error({ err }, "Failed to reconnect WhatsApp"),
+              );
           } else if (
             statusCode === 401 ||
             reason?.includes("Connection Failure")
@@ -867,13 +721,17 @@ export class WhatsAppService {
             } catch (_error) {
               // Ignore
             }
-            this.reconnect().catch((err) =>
-              log.error({ err }, "Failed to reconnect WhatsApp"),
-            );
+            this.recovery
+              .reconnect()
+              .catch((err) =>
+                log.error({ err }, "Failed to reconnect WhatsApp"),
+              );
           } else {
-            this.reconnect().catch((err) =>
-              log.error({ err }, "Failed to reconnect WhatsApp"),
-            );
+            this.recovery
+              .reconnect()
+              .catch((err) =>
+                log.error({ err }, "Failed to reconnect WhatsApp"),
+              );
           }
         }
       });
@@ -1153,37 +1011,6 @@ export class WhatsAppService {
     });
   }
 
-  private async reconnect(): Promise<void> {
-    if (this.reconnecting) {
-      log.info(
-        "Reconnect requested while another reconnect is already running",
-      );
-      return;
-    }
-    this.reconnecting = true;
-    try {
-      const attempt = Math.min(this.reconnectAttempts, 6);
-      const delayMs = Math.min(30000, 1000 * Math.pow(2, attempt));
-      this.reconnectAttempts += 1;
-      log.warn(
-        { attempt: attempt + 1, delayMs },
-        "Starting WhatsApp reconnect",
-      );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      await this.withLifecycleLock(async () => {
-        log.info("Reconnect: destroying current WhatsApp client");
-        await this.destroyInternal();
-        log.info("Reconnect: initializing WhatsApp client");
-        await this.initializeWithinLifecycleLock();
-      });
-      log.info("Reconnect flow completed");
-    } catch (error) {
-      log.error({ err: error }, "Reconnect failed");
-    } finally {
-      this.reconnecting = false;
-    }
-  }
-
   async forceResync(): Promise<void> {
     await this.withLifecycleLock(async () => {
       await this.sync.forceResync(async () => {
@@ -1206,7 +1033,7 @@ export class WhatsAppService {
       });
       await this.destroyInternal();
       await this.initializeWithinLifecycleLock();
-      this.ensureReconnectAfterResync();
+      this.recovery.ensureReconnectAfterResync();
     });
   }
 
@@ -1232,23 +1059,6 @@ export class WhatsAppService {
         // Ignore
       }
     });
-  }
-
-  private ensureReconnectAfterResync(): void {
-    if (!this.resyncReconnectEnabled) {
-      return;
-    }
-    if (!this.resyncReconnectDelayMs || this.resyncReconnectDelayMs <= 0) {
-      return;
-    }
-    setTimeout(() => {
-      if (this.isReadyFlag) return;
-      log.warn(
-        { delayMs: this.resyncReconnectDelayMs },
-        "Force resync did not reach ready state; reconnecting",
-      );
-      this.reconnect();
-    }, this.resyncReconnectDelayMs);
   }
 
   isAuthenticated(): boolean {
@@ -1298,76 +1108,37 @@ export class WhatsAppService {
   } {
     const now = Date.now();
     const chatCount = this.getChatCount();
+    const stats = this.recovery.getStats();
+    const graceMs = this.recovery.readinessGraceMs;
     const recoveringRecently =
-      this.syncRecoveryInProgress ||
-      (this.lastRecoveryAt !== null &&
-        now - this.lastRecoveryAt <= this.readinessGraceMs);
+      stats.syncRecoveryInProgress ||
+      (stats.lastRecoveryAt !== null && now - stats.lastRecoveryAt <= graceMs);
     const disconnectedRecently =
-      this.lastDisconnectAt !== null &&
-      now - this.lastDisconnectAt <= this.readinessGraceMs;
+      stats.lastDisconnectAt !== null &&
+      now - stats.lastDisconnectAt <= graceMs;
 
-    if (this.isReadyFlag) {
-      return {
-        ok: true,
-        reason: "ready",
-        ready: this.isReadyFlag,
-        authenticated: this.isAuthenticatedFlag,
-        chatCount,
-        lastDisconnectAt: this.lastDisconnectAt,
-        lastRecoveryAt: this.lastRecoveryAt,
-        syncRecoveryInProgress: this.syncRecoveryInProgress,
-      };
-    }
-
-    if (recoveringRecently) {
-      return {
-        ok: true,
-        reason: "recovering",
-        ready: this.isReadyFlag,
-        authenticated: this.isAuthenticatedFlag,
-        chatCount,
-        lastDisconnectAt: this.lastDisconnectAt,
-        lastRecoveryAt: this.lastRecoveryAt,
-        syncRecoveryInProgress: this.syncRecoveryInProgress,
-      };
-    }
-
-    if (!this.isAuthenticatedFlag && this.latestQrCode) {
-      return {
-        ok: true,
-        reason: "awaiting-qr",
-        ready: this.isReadyFlag,
-        authenticated: this.isAuthenticatedFlag,
-        chatCount,
-        lastDisconnectAt: this.lastDisconnectAt,
-        lastRecoveryAt: this.lastRecoveryAt,
-        syncRecoveryInProgress: this.syncRecoveryInProgress,
-      };
-    }
-
-    if (disconnectedRecently) {
-      return {
-        ok: true,
-        reason: "recent-disconnect",
-        ready: this.isReadyFlag,
-        authenticated: this.isAuthenticatedFlag,
-        chatCount,
-        lastDisconnectAt: this.lastDisconnectAt,
-        lastRecoveryAt: this.lastRecoveryAt,
-        syncRecoveryInProgress: this.syncRecoveryInProgress,
-      };
-    }
-
-    return {
-      ok: false,
-      reason: "not-ready",
+    const base = {
       ready: this.isReadyFlag,
       authenticated: this.isAuthenticatedFlag,
       chatCount,
-      lastDisconnectAt: this.lastDisconnectAt,
-      lastRecoveryAt: this.lastRecoveryAt,
-      syncRecoveryInProgress: this.syncRecoveryInProgress,
+      lastDisconnectAt: stats.lastDisconnectAt,
+      lastRecoveryAt: stats.lastRecoveryAt,
+      syncRecoveryInProgress: stats.syncRecoveryInProgress,
     };
+
+    if (this.isReadyFlag) {
+      return { ok: true, reason: "ready", ...base };
+    }
+    if (recoveringRecently) {
+      return { ok: true, reason: "recovering", ...base };
+    }
+    if (!this.isAuthenticatedFlag && this.latestQrCode) {
+      return { ok: true, reason: "awaiting-qr", ...base };
+    }
+    if (disconnectedRecently) {
+      return { ok: true, reason: "recent-disconnect", ...base };
+    }
+    return { ok: false, reason: "not-ready", ...base };
   }
 
   private async withLifecycleLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -1470,14 +1241,15 @@ export class WhatsAppService {
     syncRecoveryAttempts: number;
     syncRecoveryInProgress: boolean;
   } {
+    const stats = this.recovery.getStats();
     return {
-      sessionReplaced: this.sessionReplaced,
-      lastDisconnectReason: this.lastDisconnectReason,
-      lastDisconnectAt: this.lastDisconnectAt,
-      lastRecoveryReason: this.lastRecoveryReason,
-      lastRecoveryAt: this.lastRecoveryAt,
-      syncRecoveryAttempts: this.syncRecoveryAttempts,
-      syncRecoveryInProgress: this.syncRecoveryInProgress,
+      sessionReplaced: stats.sessionReplaced,
+      lastDisconnectReason: stats.lastDisconnectReason,
+      lastDisconnectAt: stats.lastDisconnectAt,
+      lastRecoveryReason: stats.lastRecoveryReason,
+      lastRecoveryAt: stats.lastRecoveryAt,
+      syncRecoveryAttempts: stats.syncRecoveryAttempts,
+      syncRecoveryInProgress: stats.syncRecoveryInProgress,
     };
   }
 
