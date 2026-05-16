@@ -35,6 +35,7 @@ import { MessageIndexStore } from "./message-index-store.js";
 import { JidResolver } from "./jid-resolver.js";
 import { RecoveryManager } from "./recovery-manager.js";
 import { ConcurrencyQueue } from "../utils/concurrency-queue.js";
+import { withTimeout } from "../utils/with-timeout.js";
 
 import {
   ALL_WA_PATCH_NAMES,
@@ -56,6 +57,12 @@ export class WhatsAppService {
   private ownJid: string | null = null;
   private legacySenderBackfilled = false;
   private initializing: Promise<void> | null = null;
+  private readonly initializeTimeoutMs: number = (() => {
+    const raw = process.env.WA_INITIALIZE_TIMEOUT_MS;
+    if (raw === undefined || raw === "") return 120_000;
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.max(0, n) : 120_000;
+  })();
   private readonly messageIndexStore: MessageIndexStore;
   private lifecycleLock: Promise<void> = Promise.resolve();
   private sessionDir: string;
@@ -609,12 +616,21 @@ export class WhatsAppService {
     };
   }
 
+  private async waitForInitializing(): Promise<void> {
+    if (!this.initializing) return;
+    await withTimeout(
+      this.initializing,
+      this.initializeTimeoutMs,
+      "WhatsApp initialize",
+    );
+  }
+
   private async initializeWithinLifecycleLock(): Promise<void> {
     if (this.initializing) {
       log.info(
         "Initialize requested while another initialize is already running",
       );
-      await this.initializing;
+      await this.waitForInitializing();
       return;
     }
 
@@ -1044,7 +1060,7 @@ export class WhatsAppService {
       log.info("Initialize flow settled");
     });
 
-    await this.initializing;
+    await this.waitForInitializing();
   }
 
   async initialize(): Promise<void> {
