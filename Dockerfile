@@ -1,7 +1,7 @@
 # WhatsApp MCP Stream Dockerfile
 # Node.js 20 with FFmpeg
 
-FROM node:20-bullseye-slim AS builder
+FROM node:22-bookworm-slim AS builder
 
 # Install system dependencies for building (with retry for flaky apt in CI)
 RUN set -e; \
@@ -34,7 +34,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM node:20-bullseye-slim
+FROM node:22-bookworm-slim
 
 # Install runtime dependencies: FFmpeg and certificates (with retry for flaky apt)
 RUN set -e; \
