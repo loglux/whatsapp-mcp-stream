@@ -34,6 +34,7 @@ import { IdempotencyManager } from "./idempotency-manager.js";
 import { MessageIndexStore } from "./message-index-store.js";
 import { JidResolver } from "./jid-resolver.js";
 import { RecoveryManager } from "./recovery-manager.js";
+import { ConcurrencyQueue } from "../utils/concurrency-queue.js";
 
 import {
   ALL_WA_PATCH_NAMES,
@@ -72,12 +73,28 @@ export class WhatsAppService {
   private idempotency: IdempotencyManager;
   private jidResolver: JidResolver;
   private recovery: RecoveryManager;
+  private readonly autoDownloadQueue: ConcurrencyQueue;
 
   constructor() {
     const baseDir =
       process.env.SESSION_DIR ||
       path.join(process.cwd(), "whatsapp-sessions", "baileys");
     this.sessionDir = baseDir;
+    this.autoDownloadQueue = new ConcurrencyQueue({
+      concurrency: Math.max(
+        1,
+        Number(process.env.WA_AUTO_DOWNLOAD_CONCURRENCY) || 3,
+      ),
+      maxQueued: Math.max(
+        0,
+        Number(process.env.WA_AUTO_DOWNLOAD_QUEUE_MAX) || 200,
+      ),
+      onDrop: (queueSize) =>
+        log.warn(
+          { queueSize },
+          "Auto-download backlog overflow; dropped oldest pending job",
+        ),
+    });
     this.messageIndexStore = new MessageIndexStore({
       maxIndexSize: Math.max(
         1000,
@@ -230,11 +247,13 @@ export class WhatsAppService {
       return;
     }
 
-    try {
-      await this.downloadMedia(messageId);
-    } catch (error) {
-      log.warn({ err: error, messageId }, "Auto-download media failed");
-    }
+    this.autoDownloadQueue.enqueue(async () => {
+      try {
+        await this.downloadMedia(messageId);
+      } catch (error) {
+        log.warn({ err: error, messageId }, "Auto-download media failed");
+      }
+    });
   }
 
   private initStoreService(): void {
