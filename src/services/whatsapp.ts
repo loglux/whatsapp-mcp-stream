@@ -3,12 +3,7 @@ import path from "path";
 import axios from "axios";
 import { fileTypeFromBuffer } from "file-type";
 import { log } from "../utils/logger.js";
-import {
-  mapContact,
-  mapMessage,
-  mapStoredMessage,
-  resolveStoredSender,
-} from "../core/mappers.js";
+import { mapContact, mapMessage, mapStoredMessage } from "../core/mappers.js";
 import {
   ResolvedContact,
   SimpleChat,
@@ -16,11 +11,7 @@ import {
   SimpleMessage,
 } from "../core/types.js";
 import {
-  StoredChat,
-  StoredContact,
-  StoredGroupMeta,
   StoredGroupParticipant,
-  StoredMessage,
   StoredMedia,
 } from "../storage/message-store.js";
 import { StoreService } from "../providers/store/store-service.js";
@@ -36,6 +27,7 @@ import { JidResolver } from "./jid-resolver.js";
 import { RecoveryManager } from "./recovery-manager.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { AutoDownloadManager } from "./auto-download-manager.js";
+import { StorageWriter } from "./storage-writer.js";
 
 import {
   ALL_WA_PATCH_NAMES,
@@ -81,6 +73,7 @@ export class WhatsAppService {
   private jidResolver: JidResolver;
   private recovery: RecoveryManager;
   private autoDownload!: AutoDownloadManager;
+  private storage!: StorageWriter;
 
   constructor() {
     const baseDir =
@@ -103,6 +96,10 @@ export class WhatsAppService {
     this.initStoreService();
     this.storeService?.deleteExpiredIdempotencyRecords();
     this.jidResolver = new JidResolver(this.storeService);
+    this.storage = new StorageWriter({
+      storeService: this.storeService,
+      getOwnJid: () => this.ownJid,
+    });
     const autoDownloadMaxMbRaw = Number(process.env.AUTO_DOWNLOAD_MAX_MB);
     this.autoDownload = new AutoDownloadManager(
       {
@@ -126,8 +123,8 @@ export class WhatsAppService {
       () => this.getSocketOptional(),
       (chat: any) => this.normalizeChatRecord(chat),
       (msg: any) => this.trackMessage(msg),
-      (chat: any) => this.upsertStoredChat(chat),
-      (msg: any) => this.upsertStoredMessage(msg),
+      (chat: any) => this.storage.upsertChat(chat),
+      (msg: any) => this.storage.upsertMessage(msg),
       () => this.getChatCount(),
     );
     this.groupAudit = new GroupAuditEngine({
@@ -213,75 +210,6 @@ export class WhatsAppService {
     ) {
       this.recovery.scheduleSyncRecovery(message);
     }
-  }
-
-  private upsertStoredMessage(msg: any): void {
-    if (!this.storeService) return;
-    const mapped = mapMessage(msg, MessageIndexStore.serializeMessageId);
-    const record: StoredMessage = {
-      id: mapped.id,
-      chat_jid: mapped.to,
-      from: resolveStoredSender(mapped, this.ownJid),
-      to: mapped.to,
-      timestamp: mapped.timestamp,
-      from_me: mapped.fromMe ? 1 : 0,
-      body: mapped.body || "",
-      has_media: mapped.hasMedia ? 1 : 0,
-      type: mapped.type,
-    };
-    this.storeService.upsertMessage(record);
-  }
-
-  private updateStoredMessageContent(msg: any): void {
-    if (!this.storeService) return;
-    const mapped = mapMessage(msg, MessageIndexStore.serializeMessageId);
-    const changes = this.storeService.updateMessageContent(
-      mapped.id,
-      mapped.body || "",
-      mapped.hasMedia ? 1 : 0,
-      mapped.type,
-    );
-    if (changes === 0) {
-      this.upsertStoredMessage(msg);
-    }
-  }
-
-  private upsertStoredChat(chat: any): void {
-    if (!this.storeService) return;
-    const id = chat?.id || chat?.jid;
-    if (!id) return;
-    const rawTs = chat?.conversationTimestamp;
-    const tsValue =
-      typeof rawTs === "number"
-        ? rawTs
-        : typeof rawTs?.toNumber === "function"
-          ? rawTs.toNumber()
-          : Number(rawTs || 0);
-    const record: StoredChat = {
-      id,
-      name: chat?.name || chat?.subject || id,
-      is_group: String(id).endsWith("@g.us") ? 1 : 0,
-      unread_count: chat?.unreadCount || 0,
-      timestamp: tsValue * 1000,
-    };
-    this.storeService.upsertChat(record);
-  }
-
-  private upsertStoredContact(contact: any): void {
-    if (!this.storeService || !contact) return;
-    const jid = contact?.id || contact?.jid;
-    if (!jid) return;
-    const mapped = mapContact(contact);
-    const record: StoredContact = {
-      jid,
-      name: mapped.name,
-      pushname: mapped.pushname,
-      number: mapped.number || null,
-      is_group: mapped.isGroup ? 1 : 0,
-      is_my_contact: mapped.isMyContact ? 1 : 0,
-      updated_at: Date.now(),
-    };
-    this.storeService.upsertContact(record);
   }
 
   private getContactSummary(jid: string): {
@@ -437,36 +365,6 @@ export class WhatsAppService {
       });
     }
     return Array.from(merged.values());
-  }
-
-  private persistGroupMetadata(metadata: any): void {
-    if (!this.storeService || !metadata) return;
-    const jid = metadata?.id;
-    if (!jid) return;
-    const record: StoredGroupMeta = {
-      jid,
-      subject: metadata?.subject || null,
-      owner: metadata?.owner || metadata?.ownerPn || null,
-      subject_owner: metadata?.subjectOwner || metadata?.subjectOwnerPn || null,
-      size: typeof metadata?.size === "number" ? metadata.size : null,
-      creation:
-        typeof metadata?.creation === "number" ? metadata.creation : null,
-      desc: metadata?.desc || null,
-      updated_at: Date.now(),
-    };
-    this.storeService.upsertGroupMeta(record);
-
-    const participants = Array.isArray(metadata?.participants)
-      ? metadata.participants.map((p: any) => ({
-          group_jid: jid,
-          participant_jid: p?.id || "",
-          admin: p?.admin || null,
-          updated_at: Date.now(),
-        }))
-      : [];
-    if (participants.length) {
-      this.storeService.replaceGroupParticipants(jid, participants);
-    }
   }
 
   private getCachedGroupInfo(groupJid: string): any | null {
@@ -736,10 +634,10 @@ export class WhatsAppService {
         if (!ev?.messages) return;
         for (const msg of ev.messages) {
           this.trackMessage(msg);
-          this.upsertStoredMessage(msg);
+          this.storage.upsertMessage(msg);
           const jid = msg?.key?.remoteJid;
           if (jid) {
-            this.upsertStoredChat({
+            this.storage.upsertChat({
               id: jid,
               conversationTimestamp: msg?.messageTimestamp,
             });
@@ -770,7 +668,7 @@ export class WhatsAppService {
             : undefined;
           if (merged) {
             if (update.update?.message) {
-              this.updateStoredMessageContent(merged);
+              this.storage.updateMessageContent(merged);
             }
           } else if (update?.update?.message && update?.key?.remoteJid) {
             const synthetic = {
@@ -781,7 +679,7 @@ export class WhatsAppService {
                 update.update?.timestamp ??
                 0,
             };
-            this.updateStoredMessageContent(synthetic);
+            this.storage.updateMessageContent(synthetic);
           }
         }
       });
@@ -922,7 +820,7 @@ export class WhatsAppService {
         if (payload && Array.isArray(payload)) {
           log.info({ count: payload.length }, "Contacts upsert");
           for (const contact of payload) {
-            this.upsertStoredContact(contact);
+            this.storage.upsertContact(contact);
             this.jidResolver.storeLidMappingFromContact(contact);
           }
         }
@@ -935,7 +833,7 @@ export class WhatsAppService {
         if (payload && Array.isArray(payload)) {
           log.info({ count: payload.length }, "Contacts update");
           for (const contact of payload) {
-            this.upsertStoredContact(contact);
+            this.storage.upsertContact(contact);
             this.jidResolver.storeLidMappingFromContact(contact);
           }
         }
@@ -978,7 +876,7 @@ export class WhatsAppService {
         const contacts = payload?.contacts;
         if (contacts && Array.isArray(contacts)) {
           for (const contact of contacts) {
-            this.upsertStoredContact(contact);
+            this.storage.upsertContact(contact);
             this.jidResolver.storeLidMappingFromContact(contact);
           }
         }
@@ -1592,7 +1490,7 @@ export class WhatsAppService {
     const normalized = this.jidResolver.resolveLookupJid(groupJid);
     try {
       const metadata = await socket.groupMetadata(normalized);
-      this.persistGroupMetadata(metadata);
+      this.storage.persistGroupMetadata(metadata);
       const participants = Array.isArray(metadata?.participants)
         ? metadata.participants.map((p: any) => {
             const jid = JidResolver.normalizeJid(p?.id || "");
