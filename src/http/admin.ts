@@ -191,6 +191,9 @@ export function registerAdminRoutes(
       const syncStats = whatsapp.getSyncStats();
       const dbStats = whatsapp.getMessageStoreStats();
       const connectionInfo = whatsapp.getConnectionInfo();
+      const autoDownload = whatsapp.getAutoDownloadStats();
+      const recovery = whatsapp.getRecoveryStats();
+      const messageIndex = whatsapp.getMessageIndexStats();
       res.json({
         authenticated: isAuthenticated,
         ready: isReady,
@@ -213,6 +216,9 @@ export function registerAdminRoutes(
         lastRecoveryAt: connectionInfo.lastRecoveryAt,
         syncRecoveryAttempts: connectionInfo.syncRecoveryAttempts,
         syncRecoveryInProgress: connectionInfo.syncRecoveryInProgress,
+        autoDownload,
+        messageIndex,
+        recovery,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {

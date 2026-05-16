@@ -1000,6 +1000,25 @@ export class WhatsAppService {
     return this.storeService.stats();
   }
 
+  getAutoDownloadStats(): {
+    enabled: boolean;
+    inFlight: number;
+    queued: number;
+  } {
+    return this.autoDownload.getStats();
+  }
+
+  getRecoveryStats(): ReturnType<RecoveryManager["getStats"]> {
+    return this.recovery.getStats();
+  }
+
+  getMessageIndexStats(): { messageCount: number; chatCount: number } {
+    return {
+      messageCount: this.messageIndexStore.messageCount,
+      chatCount: this.messageIndexStore.chatCount,
+    };
+  }
+
   private getChatCount(): number {
     if (this.storeService) {
       const stats = this.storeService.stats();
