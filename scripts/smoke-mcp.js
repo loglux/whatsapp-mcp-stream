@@ -5,9 +5,16 @@ const mcpUrl = `${baseUrl.replace(/\/$/, "")}/mcp`;
 
 function parseSseData(text) {
   const line = text.split("\n").find((l) => l.startsWith("data: "));
-  if (!line) return null;
+  if (line) {
+    try {
+      return JSON.parse(line.slice(6));
+    } catch {
+      // Fall through to direct-JSON parsing.
+    }
+  }
+  // MCP_HTTP_ENABLE_JSON_RESPONSE=1 makes the server return raw JSON-RPC.
   try {
-    return JSON.parse(line.slice(6));
+    return JSON.parse(text);
   } catch {
     return null;
   }
