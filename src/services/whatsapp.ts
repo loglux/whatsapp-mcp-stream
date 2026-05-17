@@ -1012,8 +1012,23 @@ export class WhatsAppService {
     search: string,
   ): { chats: AdminChat[]; total: number } {
     if (!this.storeService) return { chats: [], total: 0 };
+    const chats = this.storeService.listChatsForAdmin(limit, offset, search);
+    const resolved = chats.map((chat) => {
+      const isUnresolved =
+        chat.display_name === chat.id ||
+        chat.display_name.endsWith("@lid") ||
+        chat.display_name.endsWith("@s.whatsapp.net");
+      if (!isUnresolved) return chat;
+      const related = this.jidResolver.getRelatedJids(chat.id);
+      const name = this.contactPresenter.getBestChatName(
+        related,
+        chat.id,
+        null,
+      );
+      return name ? { ...chat, display_name: name } : chat;
+    });
     return {
-      chats: this.storeService.listChatsForAdmin(limit, offset, search),
+      chats: resolved,
       total: this.storeService.countChatsForAdmin(search),
     };
   }
