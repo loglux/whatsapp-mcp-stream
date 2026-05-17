@@ -283,6 +283,235 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        /* Chat viewer */
+        .chat-layout {
+            display: flex;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.1);
+            overflow: hidden;
+            height: 620px;
+            background: rgba(0,0,0,0.2);
+        }
+        .chat-list-panel {
+            width: 300px;
+            min-width: 260px;
+            border-right: 1px solid rgba(255,255,255,0.08);
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-search-wrap {
+            padding: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            flex-shrink: 0;
+        }
+        .chat-search-wrap input {
+            width: 100%;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 10px;
+            padding: 8px 12px;
+            color: var(--text);
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        .chat-search-wrap input:focus {
+            outline: none;
+            border-color: rgba(37,211,102,0.4);
+        }
+        .chat-list-scroll {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .chat-list-scroll::-webkit-scrollbar { width: 4px; }
+        .chat-list-scroll::-webkit-scrollbar-track { background: transparent; }
+        .chat-list-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+        .chat-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 11px 14px;
+            cursor: pointer;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            transition: background 0.15s;
+        }
+        .chat-item:hover { background: rgba(255,255,255,0.04); }
+        .chat-item.active { background: rgba(37,211,102,0.1); }
+        .chat-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #17b3a3, #25d366);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 15px;
+            color: white;
+            flex-shrink: 0;
+        }
+        .chat-avatar.is-group {
+            background: linear-gradient(135deg, #4a6fa5, #5ee3ff);
+            font-size: 18px;
+        }
+        .chat-meta { flex: 1; min-width: 0; }
+        .chat-name {
+            font-weight: 600;
+            font-size: 13px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .chat-preview {
+            font-size: 12px;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-top: 2px;
+        }
+        .chat-side { text-align: right; flex-shrink: 0; }
+        .chat-time { font-size: 11px; color: var(--muted); }
+        .chat-unread {
+            background: var(--accent);
+            color: white;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 1px 6px;
+            margin-top: 3px;
+            display: inline-block;
+        }
+        .chat-list-empty {
+            padding: 40px 16px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 13px;
+        }
+        .chat-load-more-wrap {
+            padding: 10px;
+            text-align: center;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            flex-shrink: 0;
+        }
+        .chat-load-more-wrap button {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            color: var(--muted);
+            font-size: 12px;
+            padding: 6px 14px;
+            box-shadow: none;
+        }
+
+        /* Message area */
+        .msg-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .msg-header {
+            padding: 13px 18px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+        .msg-header-name { font-weight: 600; font-size: 15px; }
+        .msg-header-jid { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .msg-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .msg-scroll::-webkit-scrollbar { width: 4px; }
+        .msg-scroll::-webkit-scrollbar-track { background: transparent; }
+        .msg-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+        .msg-load-older {
+            text-align: center;
+            padding: 8px 0 4px;
+            flex-shrink: 0;
+        }
+        .msg-load-older button {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: var(--muted);
+            font-size: 12px;
+            padding: 5px 14px;
+            box-shadow: none;
+        }
+        .msg-empty {
+            text-align: center;
+            color: var(--muted);
+            padding: 60px 20px;
+            font-size: 14px;
+        }
+        .msg-no-chat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted);
+            font-size: 14px;
+            gap: 8px;
+        }
+        .msg-no-chat-icon { font-size: 40px; opacity: 0.3; }
+        .msg-wrap { display: flex; }
+        .msg-wrap.from-me { justify-content: flex-end; }
+        .msg-bubble {
+            max-width: 72%;
+            padding: 7px 11px 5px;
+            border-radius: 12px;
+            font-size: 13.5px;
+            line-height: 1.45;
+            word-break: break-word;
+        }
+        .msg-wrap.from-me .msg-bubble {
+            background: rgba(37,211,102,0.18);
+            border: 1px solid rgba(37,211,102,0.28);
+            border-bottom-right-radius: 3px;
+        }
+        .msg-wrap:not(.from-me) .msg-bubble {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-bottom-left-radius: 3px;
+        }
+        .msg-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 3px;
+            justify-content: flex-end;
+        }
+        .msg-time { font-size: 10.5px; color: var(--muted); }
+        .msg-media-badge {
+            font-size: 10px;
+            background: rgba(94,227,255,0.15);
+            color: var(--accent-2);
+            border-radius: 5px;
+            padding: 1px 5px;
+        }
+        .msg-date-sep {
+            text-align: center;
+            margin: 8px 0 4px;
+        }
+        .msg-date-sep span {
+            font-size: 11px;
+            color: var(--muted);
+            background: rgba(255,255,255,0.05);
+            border-radius: 999px;
+            padding: 2px 10px;
+        }
+        @media (max-width: 720px) {
+            .chat-layout { flex-direction: column; height: auto; }
+            .chat-list-panel { width: 100%; min-width: unset; border-right: none; border-bottom: 1px solid rgba(255,255,255,0.08); max-height: 260px; }
+            .msg-area { min-height: 360px; }
+        }
     </style>
 </head>
 <body>
@@ -329,6 +558,7 @@
 
         <div class="tabs">
             <button class="tab-btn active" data-tab="settingsTab" onclick="openTab('settingsTab', this)">Settings</button>
+            <button class="tab-btn" data-tab="chatsTab" onclick="openTab('chatsTab', this); initChatsTab()">Chats</button>
             <button class="tab-btn" data-tab="exportTab" onclick="openTab('exportTab', this)">Export</button>
             <button class="tab-btn" data-tab="statusTab" onclick="openTab('statusTab', this)">Status</button>
         </div>
@@ -393,6 +623,26 @@
                 <div class="row stretch" style="margin-top: 16px;">
                     <span id="settingsStatus"></span>
                     <button id="saveSettingsBtn" onclick="saveSettings()">Save Settings</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="chatsTab" class="tab-panel">
+            <div class="chat-layout">
+                <div class="chat-list-panel">
+                    <div class="chat-search-wrap">
+                        <input id="chatSearch" type="text" placeholder="Search chats..." oninput="debouncedChatSearch(this.value)">
+                    </div>
+                    <div class="chat-list-scroll" id="chatListScroll"></div>
+                    <div class="chat-load-more-wrap" id="chatLoadMoreWrap" style="display:none">
+                        <button onclick="loadMoreChats()">Load more</button>
+                    </div>
+                </div>
+                <div class="msg-area" id="msgArea">
+                    <div class="msg-no-chat">
+                        <div class="msg-no-chat-icon">💬</div>
+                        <div>Select a chat to view messages</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -704,6 +954,243 @@
                 }
             }, 10000); // Check every 10 seconds
         }
+
+        // ── Chat viewer ──────────────────────────────────────────────────────
+
+        let chatState = {
+            chats: [],
+            chatOffset: 0,
+            chatSearch: '',
+            chatTotal: 0,
+            chatTabInited: false,
+            activeJid: null,
+            activeName: '',
+            msgOffset: 0,
+            msgTotal: 0,
+        };
+
+        function escHtml(s) {
+            return String(s ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function fmtChatTime(ts) {
+            if (!ts) return '';
+            const d = new Date(ts * 1000);
+            const now = new Date();
+            const isToday = d.toDateString() === now.toDateString();
+            if (isToday) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const yesterday = new Date(now);
+            yesterday.setDate(now.getDate() - 1);
+            if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+            return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        }
+
+        function fmtMsgTime(ts) {
+            if (!ts) return '';
+            return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function fmtMsgDate(ts) {
+            if (!ts) return '';
+            const d = new Date(ts * 1000);
+            const now = new Date();
+            if (d.toDateString() === now.toDateString()) return 'Today';
+            const yesterday = new Date(now);
+            yesterday.setDate(now.getDate() - 1);
+            if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+            return d.toLocaleDateString([], { year: 'numeric', month: 'long', day: 'numeric' });
+        }
+
+        function chatInitials(name, isGroup) {
+            if (isGroup) return '👥';
+            if (!name) return '?';
+            const parts = name.trim().split(/\s+/);
+            if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+            return name.slice(0, 2).toUpperCase();
+        }
+
+        function renderChatItem(chat) {
+            const isGroup = Boolean(chat.is_group);
+            const avatarClass = isGroup ? 'chat-avatar is-group' : 'chat-avatar';
+            const initials = chatInitials(chat.name, isGroup);
+            const unreadBadge = chat.unread_count > 0
+                ? `<div class="chat-unread">${chat.unread_count}</div>`
+                : '';
+            const div = document.createElement('div');
+            div.className = 'chat-item' + (chat.id === chatState.activeJid ? ' active' : '');
+            div.dataset.jid = chat.id;
+            div.innerHTML = `
+                <div class="${avatarClass}">${escHtml(initials)}</div>
+                <div class="chat-meta">
+                    <div class="chat-name">${escHtml(chat.name || chat.id)}</div>
+                    <div class="chat-preview">${escHtml(chat.id)}</div>
+                </div>
+                <div class="chat-side">
+                    <div class="chat-time">${fmtChatTime(chat.timestamp)}</div>
+                    ${unreadBadge}
+                </div>`;
+            div.addEventListener('click', () => selectChat(chat.id, chat.name || chat.id));
+            return div;
+        }
+
+        async function initChatsTab() {
+            if (chatState.chatTabInited) return;
+            chatState.chatTabInited = true;
+            await fetchAndRenderChats(true);
+        }
+
+        async function fetchAndRenderChats(reset = false) {
+            if (reset) {
+                chatState.chatOffset = 0;
+                chatState.chats = [];
+                document.getElementById('chatListScroll').innerHTML = '';
+            }
+            try {
+                const q = encodeURIComponent(chatState.chatSearch);
+                const data = await apiRequest(`/api/chats?limit=50&offset=${chatState.chatOffset}&q=${q}`);
+                chatState.chats = chatState.chats.concat(data.chats || []);
+                chatState.chatTotal = data.total || 0;
+                chatState.chatOffset += (data.chats || []).length;
+
+                const scroll = document.getElementById('chatListScroll');
+                if (reset) scroll.innerHTML = '';
+
+                if (data.chats.length === 0 && chatState.chatOffset === 0) {
+                    scroll.innerHTML = '<div class="chat-list-empty">No chats in database yet.</div>';
+                } else {
+                    data.chats.forEach(chat => scroll.appendChild(renderChatItem(chat)));
+                }
+
+                const loadMoreWrap = document.getElementById('chatLoadMoreWrap');
+                loadMoreWrap.style.display = chatState.chatOffset < chatState.chatTotal ? '' : 'none';
+            } catch (e) {
+                logMessage('Failed to load chats', 'error');
+            }
+        }
+
+        async function loadMoreChats() {
+            await fetchAndRenderChats(false);
+        }
+
+        let chatSearchTimer = null;
+        function debouncedChatSearch(val) {
+            clearTimeout(chatSearchTimer);
+            chatSearchTimer = setTimeout(async () => {
+                chatState.chatSearch = val.trim();
+                await fetchAndRenderChats(true);
+            }, 300);
+        }
+
+        async function selectChat(jid, name) {
+            chatState.activeJid = jid;
+            chatState.activeName = name;
+            chatState.msgOffset = 0;
+            chatState.msgTotal = 0;
+
+            document.querySelectorAll('.chat-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.jid === jid);
+            });
+
+            const area = document.getElementById('msgArea');
+            area.innerHTML = `
+                <div class="msg-header">
+                    <span class="msg-header-name">${escHtml(name)}</span>
+                    <span class="msg-header-jid">${escHtml(jid)}</span>
+                </div>
+                <div class="msg-load-older" id="msgLoadOlderWrap" style="display:none">
+                    <button onclick="loadOlderMessages()">Load older messages</button>
+                </div>
+                <div class="msg-scroll" id="msgScroll">
+                    <div class="msg-empty">Loading…</div>
+                </div>`;
+
+            await fetchAndRenderMessages(jid, true);
+        }
+
+        function renderMessages(messages, prepend = false) {
+            const scroll = document.getElementById('msgScroll');
+            if (!scroll) return;
+
+            const ordered = [...messages].reverse();
+            const prevScrollHeight = scroll.scrollHeight;
+
+            if (!prepend && ordered.length === 0) {
+                scroll.innerHTML = '<div class="msg-empty">No messages stored for this chat.</div>';
+                return;
+            }
+            if (!prepend) scroll.innerHTML = '';
+
+            let lastDate = prepend ? null : null;
+            const frag = document.createDocumentFragment();
+
+            ordered.forEach(msg => {
+                const dateStr = fmtMsgDate(msg.timestamp);
+                if (dateStr !== lastDate) {
+                    const sep = document.createElement('div');
+                    sep.className = 'msg-date-sep';
+                    sep.innerHTML = `<span>${escHtml(dateStr)}</span>`;
+                    frag.appendChild(sep);
+                    lastDate = dateStr;
+                }
+
+                const fromMe = Boolean(msg.from_me);
+                const wrap = document.createElement('div');
+                wrap.className = 'msg-wrap' + (fromMe ? ' from-me' : '');
+
+                const mediaBadge = msg.has_media
+                    ? `<span class="msg-media-badge">📎 media</span>`
+                    : '';
+                const bodyText = msg.body ? escHtml(msg.body) : '<em style="opacity:0.5">no text</em>';
+
+                wrap.innerHTML = `
+                    <div class="msg-bubble">
+                        ${bodyText}
+                        ${mediaBadge}
+                        <div class="msg-meta">
+                            <span class="msg-time">${fmtMsgTime(msg.timestamp)}</span>
+                        </div>
+                    </div>`;
+                frag.appendChild(wrap);
+            });
+
+            if (prepend) {
+                scroll.insertBefore(frag, scroll.firstChild);
+                const added = scroll.scrollHeight - prevScrollHeight;
+                scroll.scrollTop += added;
+            } else {
+                scroll.appendChild(frag);
+                scroll.scrollTop = scroll.scrollHeight;
+            }
+        }
+
+        async function fetchAndRenderMessages(jid, reset = false) {
+            try {
+                const data = await apiRequest(`/api/chats/${encodeURIComponent(jid)}/messages?limit=50&offset=${chatState.msgOffset}`);
+                chatState.msgTotal = data.total || 0;
+                chatState.msgOffset += (data.messages || []).length;
+
+                renderMessages(data.messages || [], !reset);
+
+                const loadOlder = document.getElementById('msgLoadOlderWrap');
+                if (loadOlder) {
+                    loadOlder.style.display = chatState.msgOffset < chatState.msgTotal ? '' : 'none';
+                }
+            } catch (e) {
+                logMessage('Failed to load messages', 'error');
+            }
+        }
+
+        async function loadOlderMessages() {
+            if (chatState.activeJid) {
+                await fetchAndRenderMessages(chatState.activeJid, false);
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {

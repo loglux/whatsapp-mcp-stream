@@ -11,8 +11,10 @@ import {
   SimpleMessage,
 } from "../core/types.js";
 import {
+  StoredChat,
   StoredGroupParticipant,
   StoredMedia,
+  StoredMessage,
 } from "../storage/message-store.js";
 import { StoreService } from "../providers/store/store-service.js";
 import {
@@ -998,6 +1000,30 @@ export class WhatsAppService {
   } | null {
     if (!this.storeService) return null;
     return this.storeService.stats();
+  }
+
+  getChatsPage(
+    limit: number,
+    offset: number,
+    search: string,
+  ): { chats: StoredChat[]; total: number } {
+    if (!this.storeService) return { chats: [], total: 0 };
+    return {
+      chats: this.storeService.listChatsPage(limit, offset, search),
+      total: this.storeService.countChats(search),
+    };
+  }
+
+  getMessagesPage(
+    jid: string,
+    limit: number,
+    offset: number,
+  ): { messages: StoredMessage[]; total: number } {
+    if (!this.storeService) return { messages: [], total: 0 };
+    return {
+      messages: this.storeService.listMessagesPage(jid, limit, offset),
+      total: this.storeService.countMessages(jid),
+    };
   }
 
   getAutoDownloadStats(): {

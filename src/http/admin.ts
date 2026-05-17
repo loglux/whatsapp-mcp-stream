@@ -469,6 +469,36 @@ export function registerAdminRoutes(
     }
   });
 
+  app.get("/api/chats", (req: Request, res: Response) => {
+    try {
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+      const search = String(req.query.q || "").trim();
+      const result = whatsapp.getChatsPage(limit, offset, search);
+      res.json(result);
+    } catch (error) {
+      log.error({ err: error }, "Error listing chats");
+      res.status(500).json({ error: "Failed to list chats" });
+    }
+  });
+
+  app.get("/api/chats/:jid/messages", (req: Request, res: Response) => {
+    try {
+      const jid = String(req.params.jid || "").trim();
+      if (!jid) {
+        res.status(400).json({ error: "Missing chat JID" });
+        return;
+      }
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+      const offset = Math.max(0, Number(req.query.offset) || 0);
+      const result = whatsapp.getMessagesPage(jid, limit, offset);
+      res.json(result);
+    } catch (error) {
+      log.error({ err: error }, "Error listing messages");
+      res.status(500).json({ error: "Failed to list messages" });
+    }
+  });
+
   app.get("/api/export/chat/:jid", async (req: Request, res: Response) => {
     try {
       const jid = String(req.params.jid || "").trim();

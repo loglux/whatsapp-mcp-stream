@@ -108,6 +108,26 @@ export class StoreService {
     return this.messageStore ? this.messageStore.listMessagesAll(jid) : [];
   }
 
+  listChatsPage(limit = 50, offset = 0, search = ""): StoredChat[] {
+    return this.messageStore
+      ? this.messageStore.listChatsPage(limit, offset, search)
+      : [];
+  }
+
+  countChats(search = ""): number {
+    return this.messageStore ? this.messageStore.countChats(search) : 0;
+  }
+
+  listMessagesPage(jid: string, limit = 50, offset = 0): StoredMessage[] {
+    return this.messageStore
+      ? this.messageStore.listMessagesPage(jid, limit, offset)
+      : [];
+  }
+
+  countMessages(jid: string): number {
+    return this.messageStore ? this.messageStore.countMessages(jid) : 0;
+  }
+
   getMessageById(id: string): StoredMessage | null {
     return this.messageStore ? this.messageStore.getMessageById(id) : null;
   }

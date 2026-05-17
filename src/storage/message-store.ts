@@ -293,6 +293,55 @@ export class MessageStore {
     return stmt.all(jid);
   }
 
+  listChatsPage(limit = 50, offset = 0, search = ""): StoredChat[] {
+    if (search) {
+      const stmt = this.db.prepare(
+        `SELECT id, name, is_group, unread_count, timestamp
+         FROM chats
+         WHERE name LIKE ?
+         ORDER BY timestamp DESC
+         LIMIT ? OFFSET ?`,
+      );
+      return stmt.all(`%${search}%`, limit, offset);
+    }
+    const stmt = this.db.prepare(
+      `SELECT id, name, is_group, unread_count, timestamp
+       FROM chats
+       ORDER BY timestamp DESC
+       LIMIT ? OFFSET ?`,
+    );
+    return stmt.all(limit, offset);
+  }
+
+  countChats(search = ""): number {
+    if (search) {
+      const stmt = this.db.prepare(
+        `SELECT COUNT(*) as count FROM chats WHERE name LIKE ?`,
+      );
+      return (stmt.get(`%${search}%`) as { count: number }).count;
+    }
+    const stmt = this.db.prepare(`SELECT COUNT(*) as count FROM chats`);
+    return (stmt.get() as { count: number }).count;
+  }
+
+  listMessagesPage(jid: string, limit = 50, offset = 0): StoredMessage[] {
+    const stmt = this.db.prepare(
+      `SELECT id, chat_jid, sender AS "from", recipient AS "to", timestamp, from_me, body, has_media, type
+       FROM messages
+       WHERE chat_jid = ?
+       ORDER BY timestamp DESC
+       LIMIT ? OFFSET ?`,
+    );
+    return stmt.all(jid, limit, offset);
+  }
+
+  countMessages(jid: string): number {
+    const stmt = this.db.prepare(
+      `SELECT COUNT(*) as count FROM messages WHERE chat_jid = ?`,
+    );
+    return (stmt.get(jid) as { count: number }).count;
+  }
+
   getMessageById(id: string): StoredMessage | null {
     const stmt = this.db.prepare(
       `SELECT id, chat_jid, sender AS "from", recipient AS "to", timestamp, from_me, body, has_media, type
