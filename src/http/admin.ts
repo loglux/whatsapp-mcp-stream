@@ -469,6 +469,21 @@ export function registerAdminRoutes(
     }
   });
 
+  app.get("/api/avatar/:jid", async (req: Request, res: Response) => {
+    try {
+      const jid = String(req.params.jid || "").trim();
+      if (!jid) { res.status(400).end(); return; }
+      const url = await whatsapp.getProfilePicUrl(jid);
+      if (url) {
+        res.redirect(302, url);
+      } else {
+        res.status(404).end();
+      }
+    } catch {
+      res.status(404).end();
+    }
+  });
+
   app.get("/api/chats", (req: Request, res: Response) => {
     try {
       const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));

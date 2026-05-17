@@ -14,6 +14,17 @@ export interface StoredChat {
   timestamp: number;
 }
 
+export interface AdminChat {
+  id: string;
+  display_name: string;
+  is_group: number;
+  unread_count: number;
+  timestamp: number;
+  last_message: string | null;
+  last_message_type: string | null;
+  last_message_has_media: number | null;
+}
+
 export interface StoredMessage {
   id: string;
   chat_jid: string;
@@ -293,35 +304,75 @@ export class MessageStore {
     return stmt.all(jid);
   }
 
-  listChatsPage(limit = 50, offset = 0, search = ""): StoredChat[] {
-    if (search) {
-      const stmt = this.db.prepare(
-        `SELECT id, name, is_group, unread_count, timestamp
-         FROM chats
-         WHERE name LIKE ?
-         ORDER BY timestamp DESC
-         LIMIT ? OFFSET ?`,
-      );
-      return stmt.all(`%${search}%`, limit, offset);
-    }
+  listChatsForAdmin(limit = 50, offset = 0, search = ""): AdminChat[] {
+    const like = search ? `%${search}%` : "";
     const stmt = this.db.prepare(
-      `SELECT id, name, is_group, unread_count, timestamp
-       FROM chats
+      `WITH enriched AS (
+         SELECT
+           c.id,
+           CASE
+             WHEN c.id = 'status@broadcast' THEN 'Status Updates'
+             WHEN TRIM(COALESCE(c.name, '')) != '' THEN c.name
+             WHEN TRIM(COALESCE(ct_pn.name, '')) != '' THEN ct_pn.name
+             WHEN TRIM(COALESCE(ct_pn.pushname, '')) != '' THEN ct_pn.pushname
+             WHEN lm.pn_number IS NOT NULL THEN lm.pn_number
+             WHEN TRIM(COALESCE(ct.name, '')) != '' THEN ct.name
+             WHEN TRIM(COALESCE(ct.pushname, '')) != '' THEN ct.pushname
+             WHEN TRIM(COALESCE(ct.number, '')) != '' THEN ct.number
+             WHEN c.id LIKE '%@s.whatsapp.net' THEN
+             SUBSTR(c.id, 1, INSTR(c.id, '@') - 1)
+           ELSE c.id
+           END AS display_name,
+           c.is_group,
+           c.unread_count,
+           c.timestamp,
+           (SELECT body FROM messages WHERE chat_jid = c.id
+            ORDER BY timestamp DESC LIMIT 1) AS last_message,
+           (SELECT type FROM messages WHERE chat_jid = c.id
+            ORDER BY timestamp DESC LIMIT 1) AS last_message_type,
+           (SELECT has_media FROM messages WHERE chat_jid = c.id
+            ORDER BY timestamp DESC LIMIT 1) AS last_message_has_media
+         FROM chats c
+         LEFT JOIN contacts ct ON ct.jid = c.id
+         LEFT JOIN lid_mappings lm ON lm.lid_jid = c.id
+         LEFT JOIN contacts ct_pn ON ct_pn.jid = lm.pn_jid
+       )
+       SELECT * FROM enriched
+       WHERE (? = '' OR display_name LIKE ?)
        ORDER BY timestamp DESC
        LIMIT ? OFFSET ?`,
     );
-    return stmt.all(limit, offset);
+    return stmt.all(like, like, limit, offset) as AdminChat[];
   }
 
-  countChats(search = ""): number {
-    if (search) {
-      const stmt = this.db.prepare(
-        `SELECT COUNT(*) as count FROM chats WHERE name LIKE ?`,
-      );
-      return (stmt.get(`%${search}%`) as { count: number }).count;
-    }
-    const stmt = this.db.prepare(`SELECT COUNT(*) as count FROM chats`);
-    return (stmt.get() as { count: number }).count;
+  countChatsForAdmin(search = ""): number {
+    const like = search ? `%${search}%` : "";
+    const stmt = this.db.prepare(
+      `WITH enriched AS (
+         SELECT
+           c.id,
+           CASE
+             WHEN c.id = 'status@broadcast' THEN 'Status Updates'
+             WHEN TRIM(COALESCE(c.name, '')) != '' THEN c.name
+             WHEN TRIM(COALESCE(ct_pn.name, '')) != '' THEN ct_pn.name
+             WHEN TRIM(COALESCE(ct_pn.pushname, '')) != '' THEN ct_pn.pushname
+             WHEN lm.pn_number IS NOT NULL THEN lm.pn_number
+             WHEN TRIM(COALESCE(ct.name, '')) != '' THEN ct.name
+             WHEN TRIM(COALESCE(ct.pushname, '')) != '' THEN ct.pushname
+             WHEN TRIM(COALESCE(ct.number, '')) != '' THEN ct.number
+             WHEN c.id LIKE '%@s.whatsapp.net' THEN
+               SUBSTR(c.id, 1, INSTR(c.id, '@') - 1)
+             ELSE c.id
+           END AS display_name
+         FROM chats c
+         LEFT JOIN contacts ct ON ct.jid = c.id
+         LEFT JOIN lid_mappings lm ON lm.lid_jid = c.id
+         LEFT JOIN contacts ct_pn ON ct_pn.jid = lm.pn_jid
+       )
+       SELECT COUNT(*) as count FROM enriched
+       WHERE (? = '' OR display_name LIKE ?)`,
+    );
+    return (stmt.get(like, like) as { count: number }).count;
   }
 
   listMessagesPage(jid: string, limit = 50, offset = 0): StoredMessage[] {
