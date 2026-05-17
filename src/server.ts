@@ -3,12 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Implementation } from "@modelcontextprotocol/sdk/types.js";
-import {
-  isInitializeRequest,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import express, { Request, Response } from "express"; // Import Request and Response
-import { zodToJsonSchema } from "zod-to-json-schema";
 import { WhatsAppService } from "./services/whatsapp.js";
 import { log } from "./utils/logger.js";
 import { BrowserProcessManager } from "./utils/browser-process-manager.js";
@@ -246,48 +242,20 @@ export class WhatsAppMcpServer {
     registerMessageTools(server, this.whatsapp);
     registerMediaTools(server, this.whatsapp);
 
-    // Remove example dummy tool if no longer needed, or keep for testing
-    // this.server.tool('ping', async () => ({
-    //   content: [{ type: 'text', text: 'pong' }],
-    // }));
-    // Let's keep ping for now for basic testing
     server.tool("ping", async () => ({
       content: [{ type: "text", text: "pong" }],
     }));
 
-    this.overrideListToolsHandler(server);
+    // Apply annotations via SDK 1.29+ native support (avoids zodToJsonSchema
+    // incompatibility between Zod 3 tool schemas and Zod 4 empty schemas).
+    const registeredTools = (server as any)._registeredTools as Record<string, { annotations?: ExecutionMetadata }>;
+    for (const [name, meta] of Object.entries(TOOL_EXECUTION_METADATA)) {
+      if (registeredTools[name]) {
+        registeredTools[name].annotations = meta;
+      }
+    }
 
     log.info("MCP tools registered.");
-  }
-
-  private overrideListToolsHandler(server: McpServer) {
-    server.server.setRequestHandler(ListToolsRequestSchema, () => {
-      const registeredTools = (server as any)._registeredTools || {};
-      return {
-        tools: Object.entries(registeredTools)
-          .filter(([, tool]: any) => tool?.enabled)
-          .map(([name, tool]: [string, any]) => {
-            const execution = TOOL_EXECUTION_METADATA[name];
-            return {
-              name,
-              description: tool.description,
-              inputSchema: tool.inputSchema
-                ? zodToJsonSchema(tool.inputSchema, {
-                    strictUnions: true,
-                  })
-                : {
-                    type: "object",
-                    properties: {},
-                  },
-              ...(execution
-                ? {
-                    annotations: execution,
-                  }
-                : {}),
-            };
-          }),
-      };
-    });
   }
 
   async start(transportType: "stdio" | "sse" | "http" = "stdio") {
