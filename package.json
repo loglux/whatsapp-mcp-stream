@@ -32,7 +32,7 @@
     "@modelcontextprotocol/sdk": "^1.9.0",
     "archiver": "^6.0.2",
     "axios": "^1.7.2",
-    "baileys": "^7.0.0-rc.9",
+    "baileys": "^7.0.0-rc11",
     "better-sqlite3": "^11.10.0",
     "dotenv": "^16.5.0",
     "express": "^5.0.0",
