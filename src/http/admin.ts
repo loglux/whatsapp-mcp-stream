@@ -472,7 +472,10 @@ export function registerAdminRoutes(
   app.get("/api/avatar/:jid", async (req: Request, res: Response) => {
     try {
       const jid = String(req.params.jid || "").trim();
-      if (!jid) { res.status(400).end(); return; }
+      if (!jid) {
+        res.status(400).end();
+        return;
+      }
       const url = await whatsapp.getProfilePicUrl(jid);
       if (url) {
         res.redirect(302, url);
