@@ -8,7 +8,7 @@ Key points:
 
 - Transport: Streamable HTTP at `/mcp`
 - Engine: Baileys
-- Admin UI: QR, status, logout, runtime settings
+- Admin UI: QR, status, logout, runtime settings, chat history viewer
 - Media: upload endpoints + `/media` hosting + MCP download tool
 
 ## Quick Start (Docker)
@@ -34,7 +34,7 @@ Settings can be edited in the admin UI and are persisted to `SETTINGS_PATH` (def
 ## Admin UI
 
 ![Admin UI](screenshots/wamcpstream.png)
-*Admin console with runtime settings, QR linking, export, and status.*
+*Admin console with runtime settings, QR linking, chat history viewer, export, and status.*
 
 Supported settings:
 
@@ -225,6 +225,16 @@ Additional transport diagnostics:
 - `/mcp` POST requests now log request lifecycle events in `logs/mcp-whatsapp.log`
 - this includes request entry, transport dispatch, `transport.handleRequest` completion, and HTTP `finish` / `close`
 - use these logs to determine whether latency happens before the response leaves `whatsapp-mcp-stream` or after that on the gateway/client side
+
+## Chat History API
+
+Browse stored chats and messages via:
+
+`GET /api/chats?limit=50&offset=0&q=<search>` — paginated chat list, optionally filtered by name.
+
+`GET /api/chats/:jid/messages?limit=50&offset=0` — paginated messages for a chat (newest first).
+
+Both endpoints are used by the **Chats** tab in the admin UI.
 
 ## Export
 
