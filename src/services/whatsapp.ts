@@ -11,7 +11,7 @@ import {
   SimpleMessage,
 } from "../core/types.js";
 import {
-  StoredChat,
+  AdminChat,
   StoredGroupParticipant,
   StoredMedia,
   StoredMessage,
@@ -1006,11 +1006,11 @@ export class WhatsAppService {
     limit: number,
     offset: number,
     search: string,
-  ): { chats: StoredChat[]; total: number } {
+  ): { chats: AdminChat[]; total: number } {
     if (!this.storeService) return { chats: [], total: 0 };
     return {
-      chats: this.storeService.listChatsPage(limit, offset, search),
-      total: this.storeService.countChats(search),
+      chats: this.storeService.listChatsForAdmin(limit, offset, search),
+      total: this.storeService.countChatsForAdmin(search),
     };
   }
 

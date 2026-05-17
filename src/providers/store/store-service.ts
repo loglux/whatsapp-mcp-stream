@@ -1,4 +1,5 @@
 import {
+  AdminChat,
   MessageStore,
   StoredChat,
   StoredContact,
@@ -108,14 +109,16 @@ export class StoreService {
     return this.messageStore ? this.messageStore.listMessagesAll(jid) : [];
   }
 
-  listChatsPage(limit = 50, offset = 0, search = ""): StoredChat[] {
+  listChatsForAdmin(limit = 50, offset = 0, search = ""): AdminChat[] {
     return this.messageStore
-      ? this.messageStore.listChatsPage(limit, offset, search)
+      ? this.messageStore.listChatsForAdmin(limit, offset, search)
       : [];
   }
 
-  countChats(search = ""): number {
-    return this.messageStore ? this.messageStore.countChats(search) : 0;
+  countChatsForAdmin(search = ""): number {
+    return this.messageStore
+      ? this.messageStore.countChatsForAdmin(search)
+      : 0;
   }
 
   listMessagesPage(jid: string, limit = 50, offset = 0): StoredMessage[] {
