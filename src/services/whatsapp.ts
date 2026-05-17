@@ -812,6 +812,10 @@ export class WhatsAppService {
     return this.latestQrCode;
   }
 
+  getOwnJid(): string | null {
+    return this.ownJid;
+  }
+
   getSyncStats(): {
     chatCount: number;
     messageCount: number;

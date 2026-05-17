@@ -198,6 +198,7 @@ export function registerAdminRoutes(
         authenticated: isAuthenticated,
         ready: isReady,
         qrAvailable: hasQr,
+        ownJid: whatsapp.getOwnJid(),
         chatCount: syncStats.chatCount,
         messageCount: syncStats.messageCount,
         lastHistorySyncAt: syncStats.lastHistorySyncAt,

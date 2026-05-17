@@ -781,6 +781,7 @@
             try {
                 const data = await apiRequest('/api/status');
                 updateStatus(data.authenticated, data.ready);
+                if (data.ownJid) chatState.ownJid = data.ownJid;
                 logMessage(
                     `Status: ${data.authenticated ? 'Authenticated' : 'Not authenticated'}${data.ready ? ' (ready)' : ''}`,
                     'success'
@@ -989,6 +990,7 @@
             activeName: '',
             msgOffset: 0,
             msgTotal: 0,
+            ownJid: null,
         };
 
         function escHtml(s) {
@@ -1104,7 +1106,8 @@
 
         function renderChatItem(chat) {
             const isGroup = Boolean(chat.is_group);
-            const name = chat.display_name || chat.id;
+            const isSelf = chatState.ownJid && chat.id === chatState.ownJid;
+            const name = isSelf ? 'You' : (chat.display_name || chat.id);
             const avatarClass = isGroup ? 'chat-avatar is-group' : 'chat-avatar';
             const initials = chatInitials(name, isGroup);
             const preview = chatPreviewText(chat);
