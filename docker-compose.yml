@@ -45,6 +45,9 @@ services:
 
       # Mount local .env file for custom configuration (optional)
       # - ./:/app/.env:ro
+
+      # Drop files here to send via send_media (media_path: /app/files/<name>)
+      - ./files:/app/files
     working_dir: /app
     healthcheck:
       test:
