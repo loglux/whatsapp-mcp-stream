@@ -74,6 +74,20 @@ curl -X POST http://localhost:3003/api/upload-multipart \
 
 Both return `url` and (if configured) `publicUrl`.
 
+## Sending Local Files via send_media
+
+The `./files/` directory in the project root is bind-mounted into the container at `/app/files`. Drop any file there and reference it immediately — no container restart needed:
+
+```
+# On host:
+cp report.pdf /path/to/whatsapp-mcp-stream/files/
+
+# In send_media:
+media_path: /app/files/report.pdf
+```
+
+For a URL source, pass `media_url` directly to `send_media` or `stage_media` — the server downloads the file itself without base64.
+
 ### Upload Auth (Optional)
 
 If `require_upload_token=true`, provide a token with either:
@@ -156,7 +170,8 @@ MCP_BASE_URL=http://localhost:3003 npm run smoke:mcp
 
 | Tool | Description |
 | --- | --- |
-| `send_media` | Send media (image/video/document/audio). Supports optional `idempotency_key`. |
+| `send_media` | Send media (image/video/document/audio). Accepts `media_path`, `media_url`, or `media_content` (base64). Supports optional `idempotency_key`. |
+| `stage_media` | Save a file to the server's media directory and return its local path. Use the returned `saved_path` in `send_media` (`media_path`) — avoids base64 when the source is a URL (server downloads directly), or allows sending the same file to multiple recipients without re-uploading. |
 | `download_media` | Download media from a message. |
 
 ### Utility
