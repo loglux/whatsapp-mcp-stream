@@ -1576,13 +1576,37 @@ export class WhatsAppService {
       if (detected) {
         mimetype = detected.mime;
         filename = `file.${detected.ext}`;
+      } else {
+        try {
+          const urlPathname = new URL(input).pathname;
+          const urlBase = path.basename(urlPathname);
+          if (urlBase && urlBase.includes(".")) filename = urlBase;
+        } catch {
+          // ignore URL parse errors
+        }
       }
     } else {
       buffer = fs.readFileSync(input);
+      filename = path.basename(input);
       const detected = await fileTypeFromBuffer(buffer);
       if (detected) {
         mimetype = detected.mime;
-        filename = path.basename(input);
+      } else {
+        const extMimeMap: Record<string, string> = {
+          pdf: "application/pdf",
+          docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          doc: "application/msword",
+          xls: "application/vnd.ms-excel",
+          ppt: "application/vnd.ms-powerpoint",
+          txt: "text/plain",
+          csv: "text/csv",
+          zip: "application/zip",
+          gz: "application/gzip",
+        };
+        const ext = path.extname(input).toLowerCase().replace(".", "");
+        mimetype = extMimeMap[ext] || "application/octet-stream";
       }
     }
 
