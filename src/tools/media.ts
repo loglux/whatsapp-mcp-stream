@@ -418,5 +418,163 @@ export function registerMediaTools(
     },
   );
 
+  server.tool(
+    "stage_media",
+    "Save a file to the server's media directory and return its local path. Use the returned saved_path in send_media (media_path) to send the same file to multiple recipients without re-uploading. Accepts either a URL (server downloads it) or base64 content.",
+    {
+      media_url: z
+        .string()
+        .url()
+        .optional()
+        .describe("URL of the file to download and stage"),
+      media_content: z
+        .string()
+        .optional()
+        .describe("Base64 encoded file content"),
+      mime_type: z
+        .string()
+        .optional()
+        .describe("MIME type (required when using media_content)"),
+      filename: z
+        .string()
+        .optional()
+        .describe("Desired filename (with extension)"),
+    },
+    async ({
+      media_url,
+      media_content,
+      mime_type,
+      filename,
+    }): Promise<CallToolResult> => {
+      if (!media_url && !media_content) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "One of media_url or media_content must be provided",
+            },
+          ],
+          isError: true,
+        };
+      }
+      if (media_content && !mime_type) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "mime_type is required when using media_content",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        const mediaDir =
+          process.env.MEDIA_DIR || path.join(process.cwd(), "media");
+        if (!fs.existsSync(mediaDir)) {
+          fs.mkdirSync(mediaDir, { recursive: true });
+        }
+
+        let buffer: Buffer;
+        let detectedMime: string | undefined;
+        let detectedExt: string | undefined;
+
+        if (media_url) {
+          const resp = await axios.get(media_url, {
+            responseType: "arraybuffer",
+          });
+          buffer = Buffer.from(resp.data);
+          const detected = await fileTypeFromBuffer(buffer);
+          detectedMime = detected?.mime;
+          detectedExt = detected?.ext;
+          if (!filename) {
+            try {
+              const urlBase = path.basename(new URL(media_url).pathname);
+              if (urlBase && urlBase.includes(".")) filename = urlBase;
+            } catch {
+              // ignore
+            }
+          }
+        } else {
+          buffer = Buffer.from(media_content!, "base64");
+          const detected = await fileTypeFromBuffer(buffer);
+          detectedMime = detected?.mime;
+          detectedExt = detected?.ext;
+        }
+
+        const finalMime =
+          detectedMime || mime_type || "application/octet-stream";
+
+        const mimeExtMap: Record<string, string> = {
+          "application/pdf": "pdf",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            "docx",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+            "xlsx",
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+            "pptx",
+          "application/msword": "doc",
+          "application/vnd.ms-excel": "xls",
+          "text/plain": "txt",
+          "text/csv": "csv",
+          "application/zip": "zip",
+          "audio/ogg": "ogg",
+          "audio/mpeg": "mp3",
+          "video/mp4": "mp4",
+          "image/jpeg": "jpg",
+          "image/png": "png",
+          "image/webp": "webp",
+        };
+
+        const ext =
+          detectedExt ||
+          (filename ? path.extname(filename).replace(".", "") : "") ||
+          mimeExtMap[finalMime] ||
+          finalMime.split("/")[1]?.split(";")[0] ||
+          "bin";
+
+        const baseName = filename
+          ? path
+              .basename(filename)
+              .replace(/[^a-zA-Z0-9._-]/g, "_")
+              .replace(/\.[^/.]+$/, "")
+          : `staged_${crypto.randomUUID()}`;
+        const savedFilename = `${baseName}_${Date.now()}.${ext}`;
+        const savedPath = path.join(mediaDir, savedFilename);
+
+        fs.writeFileSync(savedPath, buffer);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  success: true,
+                  saved_path: savedPath,
+                  filename: savedFilename,
+                  url: `/media/${savedFilename}`,
+                  size: buffer.length,
+                  mimetype: finalMime,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      } catch (error: any) {
+        log.error("Error in stage_media tool:", error);
+        return {
+          content: [
+            { type: "text", text: `Error staging media: ${error.message}` },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
   log.info("Media tools registered.");
 }
