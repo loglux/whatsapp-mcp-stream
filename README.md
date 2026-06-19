@@ -27,6 +27,27 @@ The server will be available at:
 - MCP endpoint: `http://localhost:3003/mcp`
 - Media files: `http://localhost:3003/media/<filename>`
 
+## DNS on hosts with `--iptables=false`
+
+On some NAS / hardened hosts (e.g. Synology with `dockerd --iptables=false`), Docker's embedded DNS proxy (`127.0.0.11`) has no iptables DNAT rules and refuses connections inside containers.
+
+Fix: copy `resolv.conf.example` to `resolv.conf` and add a volume override:
+
+```bash
+cp resolv.conf.example resolv.conf
+```
+
+Then add to a local `docker-compose.override.yml` (not committed):
+
+```yaml
+services:
+  mcp-whatsapp:
+    volumes:
+      - ./resolv.conf:/etc/resolv.conf:ro
+```
+
+`docker compose up` picks up the override automatically.
+
 ## Runtime Settings
 
 Settings can be edited in the admin UI and are persisted to `SETTINGS_PATH` (defaults to `MEDIA_DIR/settings.json`).
