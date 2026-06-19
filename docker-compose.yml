@@ -48,10 +48,6 @@ services:
 
       # Drop files here to send via send_media (media_path: /app/files/<name>)
       - ./files:/app/files
-      # Workaround: dockerd runs with --iptables=false on this host, so
-      # Docker's embedded DNS proxy (127.0.0.11) has no iptables DNAT rules
-      # and refuses connections. Override resolv.conf directly.
-      - ./resolv.conf:/etc/resolv.conf:ro
     working_dir: /app
     healthcheck:
       test:

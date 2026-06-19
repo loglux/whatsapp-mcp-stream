@@ -15,6 +15,10 @@ WA_RECOVERY_ARCHITECTURE.md
 ROADMAP.md
 docker-compose.alt.yml
 
+# Synology DNS workaround (copy from resolv.conf.example if needed)
+resolv.conf
+docker-compose.override.yml
+
 # User files for send_media (drop PDFs etc here)
 files/*
 !files/.gitkeep
