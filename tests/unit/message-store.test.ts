@@ -86,10 +86,32 @@ describe("MessageStore messages", () => {
     expect(got?.type).toBe("conversation");
   });
 
-  it("INSERT OR IGNORE does not overwrite body on duplicate id", () => {
+  it("does not overwrite existing content on duplicate id", () => {
     store.upsertMessage(sample);
     store.upsertMessage({ ...sample, body: "changed" });
     expect(store.getMessageById(sample.id)?.body).toBe("hello world");
+  });
+
+  it("upgrades stub body/type when a later upsert has real content", () => {
+    store.upsertMessage({ ...sample, body: "", type: "unknown" });
+    store.upsertMessage({ ...sample, body: "hello world", type: "conversation" });
+    const msg = store.getMessageById(sample.id);
+    expect(msg?.body).toBe("hello world");
+    expect(msg?.type).toBe("conversation");
+  });
+
+  it("upgrades stub has_media when a later upsert has media", () => {
+    store.upsertMessage({ ...sample, body: "", type: "unknown", has_media: 0 });
+    store.upsertMessage({ ...sample, body: "", type: "unknown", has_media: 1 });
+    expect(store.getMessageById(sample.id)?.has_media).toBe(1);
+  });
+
+  it("does not overwrite real content with empty body from a later upsert", () => {
+    store.upsertMessage({ ...sample, body: "real content", type: "conversation" });
+    store.upsertMessage({ ...sample, body: "", type: "unknown" });
+    const msg = store.getMessageById(sample.id);
+    expect(msg?.body).toBe("real content");
+    expect(msg?.type).toBe("conversation");
   });
 
   it("updateMessageContent returns the number of changed rows", () => {

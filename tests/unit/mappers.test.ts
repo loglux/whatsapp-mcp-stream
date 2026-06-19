@@ -25,6 +25,43 @@ describe("extractText", () => {
     );
   });
 
+  it("extracts interactiveMessage body text", () => {
+    expect(
+      extractText({ interactiveMessage: { body: { text: "promo text" } } }),
+    ).toBe("promo text");
+  });
+
+  it("falls back to interactiveMessage header image caption", () => {
+    expect(
+      extractText({
+        interactiveMessage: {
+          header: { imageMessage: { caption: "image caption" } },
+        },
+      }),
+    ).toBe("image caption");
+  });
+
+  it("falls back to interactiveMessage header video caption", () => {
+    expect(
+      extractText({
+        interactiveMessage: {
+          header: { videoMessage: { caption: "video caption" } },
+        },
+      }),
+    ).toBe("video caption");
+  });
+
+  it("prefers interactiveMessage body over header caption", () => {
+    expect(
+      extractText({
+        interactiveMessage: {
+          body: { text: "body wins" },
+          header: { imageMessage: { caption: "header loses" } },
+        },
+      }),
+    ).toBe("body wins");
+  });
+
   it("prefixes reaction emoji with 'reacted: '", () => {
     expect(extractText({ reactionMessage: { text: "👍" } })).toBe(
       "reacted: 👍",

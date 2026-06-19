@@ -149,6 +149,44 @@ describe("JidResolver storeLidMappingFromKey", () => {
     const { resolver } = freshResolver();
     expect(() => resolver.storeLidMappingFromKey(null)).not.toThrow();
   });
+
+  it("cross-pairs participant LID with remoteJidAlt PN for broadcast messages", () => {
+    const { store, resolver } = freshResolver();
+    resolver.storeLidMappingFromKey({
+      remoteJid: "1781870949@broadcast",
+      remoteJidAlt: "24102185365@s.whatsapp.net",
+      participant: "172211663016188@lid",
+      // participantAlt absent — the broadcast case
+    });
+    expect(store.mappings).toHaveLength(1);
+    expect(store.mappings[0]).toMatchObject({
+      lidJid: "172211663016188@lid",
+      pnJid: "24102185365@s.whatsapp.net",
+    });
+  });
+
+  it("does not cross-pair when participantAlt is already present", () => {
+    const { store, resolver } = freshResolver();
+    resolver.storeLidMappingFromKey({
+      remoteJid: "1781870949@broadcast",
+      remoteJidAlt: "24102185365@s.whatsapp.net",
+      participant: "172211663016188@lid",
+      participantAlt: "24102185365@s.whatsapp.net",
+    });
+    // participantAlt is present so storeLidMappingFromPair(participant, participantAlt)
+    // already fires — cross-pair must not duplicate it
+    expect(store.mappings).toHaveLength(1);
+  });
+
+  it("does not cross-pair when participant is not a LID", () => {
+    const { store, resolver } = freshResolver();
+    resolver.storeLidMappingFromKey({
+      remoteJid: "1781870949@broadcast",
+      remoteJidAlt: "24102185365@s.whatsapp.net",
+      participant: "24102185365@s.whatsapp.net",
+    });
+    expect(store.mappings).toHaveLength(0);
+  });
 });
 
 describe("JidResolver storeLidMappingFromContact", () => {

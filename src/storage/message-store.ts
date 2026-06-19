@@ -246,9 +246,16 @@ export class MessageStore {
 
   upsertMessage(msg: StoredMessage): void {
     const stmt = this.db.prepare(
-      `INSERT OR IGNORE INTO messages
+      `INSERT INTO messages
        (id, chat_jid, sender, recipient, timestamp, from_me, body, has_media, type)
-       VALUES (@id, @chat_jid, @from, @to, @timestamp, @from_me, @body, @has_media, @type)`,
+       VALUES (@id, @chat_jid, @from, @to, @timestamp, @from_me, @body, @has_media, @type)
+       ON CONFLICT(id) DO UPDATE SET
+         body      = CASE WHEN excluded.body != '' AND messages.body = ''
+                          THEN excluded.body ELSE messages.body END,
+         type      = CASE WHEN excluded.type != 'unknown' AND messages.type = 'unknown'
+                          THEN excluded.type ELSE messages.type END,
+         has_media = CASE WHEN excluded.has_media = 1 AND messages.has_media = 0
+                          THEN 1 ELSE messages.has_media END`,
     );
     stmt.run(msg);
   }

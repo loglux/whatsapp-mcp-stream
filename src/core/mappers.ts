@@ -17,6 +17,12 @@ export function extractText(message: any): string {
   if (message.templateButtonReplyMessage?.selectedDisplayText) {
     return message.templateButtonReplyMessage.selectedDisplayText;
   }
+  if (message.interactiveMessage?.body?.text)
+    return message.interactiveMessage.body.text;
+  if (message.interactiveMessage?.header?.imageMessage?.caption)
+    return message.interactiveMessage.header.imageMessage.caption;
+  if (message.interactiveMessage?.header?.videoMessage?.caption)
+    return message.interactiveMessage.header.videoMessage.caption;
   if (message.reactionMessage?.text)
     return `reacted: ${message.reactionMessage.text}`;
   return "";

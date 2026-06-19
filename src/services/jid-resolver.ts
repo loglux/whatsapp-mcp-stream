@@ -47,6 +47,21 @@ export class JidResolver {
     if (!key) return;
     this.storeLidMappingFromPair(key.remoteJid, key.remoteJidAlt);
     this.storeLidMappingFromPair(key.participant, key.participantAlt);
+    // Broadcast/status messages carry the sender's LID in `participant` and
+    // their PN in `remoteJidAlt`, but `participantAlt` is absent.
+    // Cross-pair them so the mapping is captured even without a direct DM.
+    if (
+      key.participant &&
+      JidResolver.isLidJid(String(key.participant)) &&
+      !key.participantAlt &&
+      key.remoteJidAlt &&
+      JidResolver.isPnJid(String(key.remoteJidAlt))
+    ) {
+      this.storeLidMappingFromPair(
+        String(key.participant),
+        String(key.remoteJidAlt),
+      );
+    }
   }
 
   storeLidMappingFromContact(contact: any): void {
