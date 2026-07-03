@@ -47,7 +47,7 @@ export class BaileysClient {
       printQRInTerminal: false,
       logger,
       syncFullHistory: true,
-      browser: Browsers.macOS("Desktop"),
+      browser: Browsers.ubuntu("Chrome"),
       getMessage: async (key: any) => (getMessage ? await getMessage(key) : undefined),
     });
 
