@@ -435,7 +435,12 @@ export class WhatsAppService {
             this.recovery.markSessionReplaced();
           }
           log.warn({ statusCode, reason }, "WhatsApp connection closed.");
-          this.recovery.scheduleDisconnectRecovery(statusCode, reasonText);
+          // Skip reconnect watchdog for closes we caused ourselves via destroyInternal().
+          // Those fires would re-schedule a watchdog that then kills the freshly-created
+          // socket (e.g. one waiting for QR scan), producing an infinite 30s reconnect loop.
+          if (reasonText !== "Client destroyed") {
+            this.recovery.scheduleDisconnectRecovery(statusCode, reasonText);
+          }
           if (statusCode === DisconnectReason.loggedOut) {
             log.warn("WhatsApp logged out. Clearing session.");
             try {
