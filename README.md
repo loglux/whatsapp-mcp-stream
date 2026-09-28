@@ -1,6 +1,7 @@
 # WhatsApp MCP Stream
 
 [![CI](https://github.com/loglux/whatsapp-mcp-stream/actions/workflows/ci.yml/badge.svg)](https://github.com/loglux/whatsapp-mcp-stream/actions/workflows/ci.yml)
+[![SafeSkill 94/100](https://img.shields.io/badge/SafeSkill-94%2F100_Verified%20Safe-brightgreen)](https://safeskill.dev/scan/loglux-whatsapp-mcp-stream)
 
 A WhatsApp MCP server built around **Streamable HTTP** transport, using **Baileys** for WhatsApp connectivity, with a web admin UI and bidirectional media flow (upload + download).
 
